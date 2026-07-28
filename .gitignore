@@ -33,6 +33,8 @@ traces/
 /*.wav
 /*.ppm
 /*.log
+/retroos-grub-hdd.img
+/retroos-grub-hdd.img.sha256
 
 # Claude Code session state
 .claude/
