@@ -134,6 +134,10 @@ _BOOTFS_FILES = {
     # /bin/busybox as `sh`. In the bootfs (C:\BOOT\SHELL.ELF) so it's ALWAYS
     # present — independent of whatever's on the disk root / /home/retroos.
     "//shell:shell_elf": "SHELL.ELF",
+    # Real-hardware VBE/DPMI diagnostic. Keeping it in the embedded bootfs
+    # means field-test iterations only require replacing kernel.elf on the
+    # Windows-visible FAT boot partition, not rewriting the whole disk.
+    "//test/dos/vbelfb:vbelfb_exe": "TESTS/VBELFB.EXE",
     "etc/CONFIG.BOOTFS": "CONFIG.SYS",
 }
 _BOOTFS_FILES.update(_DN_FILES)

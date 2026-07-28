@@ -11,8 +11,9 @@ use dosrt::{conv_flat_ptr, dos, dpmi, putc, puts};
 
 const MODE: u16 = 0x111; // 640x480x16
 const PAL_MODE: u16 = 0x101; // 640x480x8
-const INFO_BYTES: u16 = 256 + 4 * 4;
-const REPORT: &[u8] = b"C:\\HOST\\VBELFB.TXT\0";
+const INFO_BYTES: u16 = 512;
+const REPORT: &[u8] = b"C:\\VBELFB.TXT\0";
+const PROBE_MODES: &[u16] = &[0x100, 0x101, 0x103, 0x105, 0x110, 0x111, 0x112];
 
 fn emit(handle: u16, s: &[u8]) {
     for &b in s { putc(b); }
@@ -35,6 +36,23 @@ fn emit_hex(handle: u16, label: &[u8], value: u32) {
     emit(handle, &line[..n]);
 }
 
+fn emit_bytes(handle: u16, label: &[u8], bytes: &[u8]) {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    let mut line = [0u8; 160];
+    let mut n = 0usize;
+    for &b in label {
+        line[n] = b;
+        n += 1;
+    }
+    for &b in bytes {
+        line[n] = HEX[(b >> 4) as usize];
+        line[n + 1] = HEX[(b & 0xF) as usize];
+        n += 2;
+    }
+    line[n] = b'\r'; line[n + 1] = b'\n'; n += 2;
+    emit(handle, &line[..n]);
+}
+
 fn rd16(p: *const u8, off: usize) -> u16 {
     unsafe { core::ptr::read_unaligned(p.add(off) as *const u16) }
 }
@@ -43,14 +61,52 @@ fn rd32(p: *const u8, off: usize) -> u32 {
     unsafe { core::ptr::read_unaligned(p.add(off) as *const u32) }
 }
 
-fn vbe_mode_info(seg: u16, mode: u16) -> bool {
+fn vbe_mode_info(seg: u16, mode: u16) -> dpmi::Rmcs {
     let mut r = dpmi::Rmcs::default();
     r.eax = 0x4F01;
     r.ecx = mode as u32;
     r.es = seg;
     r.edi = 0;
     dpmi::sim_int(0x10, &mut r);
-    r.eax as u16 == 0x004F
+    r
+}
+
+fn vbe_controller_info(seg: u16) -> dpmi::Rmcs {
+    let mut r = dpmi::Rmcs::default();
+    r.eax = 0x4F00;
+    r.es = seg;
+    r.edi = 0;
+    dpmi::sim_int(0x10, &mut r);
+    r
+}
+
+fn video_mode() -> dpmi::Rmcs {
+    let mut r = dpmi::Rmcs::default();
+    r.eax = 0x0F00;
+    dpmi::sim_int(0x10, &mut r);
+    r
+}
+
+fn dump_mode(handle: u16, info: *const u8, requested: u16, r: &dpmi::Rmcs) {
+    emit_hex(handle, b"query_mode=", requested as u32);
+    emit_hex(handle, b"query_ax=", r.eax);
+    emit_hex(handle, b"query_flags=", r.flags as u32);
+    emit_hex(handle, b"query_es=", r.es as u32);
+    emit_hex(handle, b"query_di=", r.edi);
+    let raw = unsafe { core::slice::from_raw_parts(info, 64) };
+    emit_bytes(handle, b"raw00=", &raw[..16]);
+    emit_bytes(handle, b"raw10=", &raw[16..32]);
+    emit_bytes(handle, b"raw20=", &raw[32..48]);
+    emit_bytes(handle, b"raw30=", &raw[48..64]);
+    emit_hex(handle, b"attributes=", rd16(info, 0) as u32);
+    emit_hex(handle, b"pitch=", rd16(info, 0x10) as u32);
+    emit_hex(handle, b"width=", rd16(info, 0x12) as u32);
+    emit_hex(handle, b"height=", rd16(info, 0x14) as u32);
+    emit_hex(handle, b"planes=", unsafe { *info.add(0x18) } as u32);
+    emit_hex(handle, b"bpp=", unsafe { *info.add(0x19) } as u32);
+    emit_hex(handle, b"memory_model=", unsafe { *info.add(0x1B) } as u32);
+    emit_hex(handle, b"image_pages=", unsafe { *info.add(0x1D) } as u32);
+    emit_hex(handle, b"phys_base=", rd32(info, 0x28));
 }
 
 fn vbe_set_palette(seg: u16) -> bool {
@@ -154,7 +210,7 @@ pub fn app_main(argc: usize, argv: &[&[u8]]) {
     let handle = match dos::create(REPORT) {
         Some(h) => h,
         None => {
-            puts("VBELFB: cannot create C:\\HOST\\VBELFB.TXT\r\n");
+            puts("VBELFB: cannot create C:\\VBELFB.TXT\r\n");
             dos::exit(1);
         }
     };
@@ -177,30 +233,73 @@ pub fn app_main(argc: usize, argv: &[&[u8]]) {
         }
     };
     let info = conv_flat_ptr(seg);
-    unsafe { core::ptr::write_bytes(info, 0, INFO_BYTES as usize); }
+    let ds_sel = dpmi::ds_sel();
+    let ds_base = dpmi::seg_base(ds_sel);
+    emit_hex(handle, b"buffer_segment=", seg as u32);
+    emit_hex(handle, b"buffer_linear=", (seg as u32) << 4);
+    emit_hex(handle, b"ds_selector=", ds_sel as u32);
+    emit_hex(handle, b"ds_base=", ds_base);
 
-    if !vbe_mode_info(seg, mode) {
-        emit(handle, b"VBE 4F01 failed\r\n");
-        dos::close(handle);
-        dos::exit(1);
+    emit(handle, b"-- BIOS current video mode (AH=0Fh) --\r\n");
+    let current = video_mode();
+    emit_hex(handle, b"int10_0f_ax=", current.eax);
+    emit_hex(handle, b"int10_0f_bx=", current.ebx);
+    emit_hex(handle, b"int10_0f_flags=", current.flags as u32);
+
+    emit(handle, b"-- VBE controller info (AX=4F00h) --\r\n");
+    unsafe {
+        core::ptr::write_bytes(info, 0xCC, INFO_BYTES as usize);
+        core::ptr::copy_nonoverlapping(b"VBE2".as_ptr(), info, 4);
+    }
+    let controller = vbe_controller_info(seg);
+    emit_hex(handle, b"controller_ax=", controller.eax);
+    emit_hex(handle, b"controller_flags=", controller.flags as u32);
+    emit_hex(handle, b"controller_es=", controller.es as u32);
+    emit_hex(handle, b"controller_di=", controller.edi);
+    let ctrl_raw = unsafe { core::slice::from_raw_parts(info, 64) };
+    emit_bytes(handle, b"controller_raw00=", &ctrl_raw[..16]);
+    emit_bytes(handle, b"controller_raw10=", &ctrl_raw[16..32]);
+    emit_bytes(handle, b"controller_raw20=", &ctrl_raw[32..48]);
+    emit_bytes(handle, b"controller_raw30=", &ctrl_raw[48..64]);
+    emit_hex(handle, b"controller_signature=", rd32(info, 0));
+    emit_hex(handle, b"controller_version=", rd16(info, 4) as u32);
+    emit_hex(handle, b"controller_oem_ptr=", rd32(info, 6));
+    emit_hex(handle, b"controller_caps=", rd32(info, 0x0A));
+    emit_hex(handle, b"controller_modes_ptr=", rd32(info, 0x0E));
+    emit_hex(handle, b"controller_memory_64k=", rd16(info, 0x12) as u32);
+
+    emit(handle, b"-- VBE mode-info sweep (AX=4F01h) --\r\n");
+    for &probe_mode in PROBE_MODES {
+        unsafe { core::ptr::write_bytes(info, 0xCC, INFO_BYTES as usize); }
+        let query = vbe_mode_info(seg, probe_mode);
+        dump_mode(handle, info, probe_mode, &query);
     }
 
+    emit(handle, b"-- Selected mode and DPMI map --\r\n");
+    unsafe { core::ptr::write_bytes(info, 0xCC, INFO_BYTES as usize); }
+    let selected = vbe_mode_info(seg, mode);
+    dump_mode(handle, info, mode, &selected);
     let attributes = rd16(info, 0);
     let pitch = rd16(info, 0x10);
     let width = rd16(info, 0x12);
     let height = rd16(info, 0x14);
-    let bpp = unsafe { *info.add(0x19) };
     let phys = rd32(info, 0x28);
     let size = pitch as u32 * height as u32;
 
-    emit_hex(handle, b"mode=", mode as u32);
-    emit_hex(handle, b"attributes=", attributes as u32);
-    emit_hex(handle, b"width=", width as u32);
-    emit_hex(handle, b"height=", height as u32);
-    emit_hex(handle, b"bpp=", bpp as u32);
-    emit_hex(handle, b"pitch=", pitch as u32);
-    emit_hex(handle, b"phys_base=", phys);
+    emit_hex(handle, b"selected_ax=", selected.eax);
     emit_hex(handle, b"map_size=", size);
+
+    if selected.eax as u16 != 0x004F
+        || attributes & 1 == 0
+        || width == 0
+        || height == 0
+        || pitch == 0
+        || phys == 0
+    {
+        emit(handle, b"Selected mode information invalid; DPMI map skipped\r\n");
+        dos::close(handle);
+        dos::exit(2);
+    }
 
     let (cf, map_ax, mapped) = map_physical(phys, size);
     emit_hex(handle, b"map_cf=", cf as u32);
