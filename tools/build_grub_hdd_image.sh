@@ -82,7 +82,7 @@ MOUNTED=1
 grub-install \
     --target=i386-pc \
     --boot-directory="$MOUNT/boot" \
-    --modules="biosdisk part_msdos ext2 multiboot search search_fs_file configfile normal" \
+    --modules="biosdisk part_msdos ext2 multiboot search search_fs_file configfile normal all_video" \
     --no-floppy \
     --recheck \
     "$LOOP"
