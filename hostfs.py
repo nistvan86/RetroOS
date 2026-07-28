@@ -115,9 +115,9 @@ class HostFs:
         f = self.handles.pop(handle, None)
         if f:
             f.close()
-            conn.sendall(struct.pack('<i', 0))
-        else:
-            conn.sendall(struct.pack('<i', -9))
+        # RetroOS clunk/CLOSE is deliberately fire-and-forget. Sending a
+        # status word here leaves four unsolicited bytes in the serial stream;
+        # the guest then mistakes them for the next operation's response.
 
     def handle_stat(self, conn):
         path_len = struct.unpack('<H', recvall(conn, 2))[0]
@@ -153,9 +153,11 @@ class HostFs:
         entry_path = os.path.join(full, entries[index])
         is_dir = 1 if os.path.isdir(entry_path) else 0
         size = os.path.getsize(entry_path) if not is_dir else 0
+        mtime = int(os.path.getmtime(entry_path))
         conn.sendall(struct.pack('<iB', 0, len(name)))
         conn.sendall(name)
-        conn.sendall(struct.pack('<IB', size & 0xFFFFFFFF, is_dir))
+        conn.sendall(struct.pack('<IBI', size & 0xFFFFFFFF, is_dir,
+                                 mtime & 0xFFFFFFFF))
 
     def handle_create(self, conn):
         path_len = struct.unpack('<H', recvall(conn, 2))[0]
