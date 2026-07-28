@@ -1,9 +1,11 @@
 #!/bin/bash
-# Build a flashable MBR/BIOS-GRUB HDD image containing RetroOS and its ext4
-# filesystem. It packages the single upstream kernel, whose Multiboot header
-# selects native VGA when BIOS text is available and falls back to a linear
-# framebuffer on firmware without it. Run as root because loop setup, mounting,
-# and grub-install need privileges. The script only operates on a new image.
+# Build a flashable MBR/BIOS-GRUB HDD image containing RetroOS. A small active
+# FAT32 boot partition keeps old BIOS bootability checks happy; the RetroOS
+# filesystem remains ext4 in partition 2. It packages the single upstream
+# kernel, whose Multiboot header selects native VGA when BIOS text is available
+# and falls back to a linear framebuffer on firmware without it. Run as root
+# because loop setup, mounting, and grub-install need privileges. The script
+# only operates on a new image.
 
 set -euo pipefail
 
@@ -14,7 +16,7 @@ EXTRAS="$ROOT/bazel-bin/extras_tar.tar"
 GRUB_CFG="$ROOT/tools/grub-hdd-grub.cfg"
 IMAGE_SIZE_MIB=1152
 
-for tool in parted losetup partprobe mkfs.ext4 mount umount grub-install sha256sum; do
+for tool in parted losetup partprobe mformat mkfs.ext4 mount umount grub-install sha256sum; do
     command -v "$tool" >/dev/null ||
         { echo "Missing required tool: $tool" >&2; exit 1; }
 done
@@ -53,36 +55,46 @@ echo "Creating ${IMAGE_SIZE_MIB} MiB raw image: $IMAGE"
 truncate -s "${IMAGE_SIZE_MIB}M" "$IMAGE"
 parted -s "$IMAGE" \
     mklabel msdos \
-    mkpart primary ext4 1MiB 100% \
-    set 1 boot on
+    mkpart primary fat32 1MiB 65MiB \
+    set 1 boot on \
+    mkpart primary ext4 65MiB 100%
 
 echo "Attaching image through a loop device"
 LOOP="$(losetup --find --show --partscan "$IMAGE")"
 partprobe "$LOOP"
-PART="${LOOP}p1"
-[ -b "$PART" ] ||
-    { echo "Partition device was not created: $PART" >&2; exit 1; }
+BOOT_PART="${LOOP}p1"
+ROOT_PART="${LOOP}p2"
+[ -b "$BOOT_PART" ] ||
+    { echo "Boot partition device was not created: $BOOT_PART" >&2; exit 1; }
+[ -b "$ROOT_PART" ] ||
+    { echo "Root partition device was not created: $ROOT_PART" >&2; exit 1; }
 
 echo "Preparing the ext4 filesystem tree"
 tar xf "$EXTRAS" -C "$STAGE"
-mkdir -p "$STAGE/boot/grub" "$STAGE/boot/retroos"
-install -m 644 "$KERNEL" "$STAGE/boot/retroos/kernel.elf"
-install -m 644 "$GRUB_CFG" "$STAGE/boot/grub/grub.cfg"
 
 if [ -d "$STAGE/home/retroos" ]; then
     chmod -R g+w "$STAGE/home/retroos"
 fi
 
 echo "Creating and populating ext4"
-mkfs.ext4 -q -L RetroOS -d "$STAGE" "$PART"
+mkfs.ext4 -q -L RetroOS -d "$STAGE" "$ROOT_PART"
+
+echo "Creating the active FAT32 boot partition"
+# Partition 1 spans 1 MiB..65 MiB: format that bounded region directly because
+# mtools cannot obtain geometry from a Linux loop-partition block device.
+mformat -i "$IMAGE@@1M" -F -T 131072 -v RETROBOOT ::
+mount "$BOOT_PART" "$MOUNT"
+MOUNTED=1
+mkdir -p "$MOUNT/boot/grub" "$MOUNT/boot/retroos"
+install -m 644 "$KERNEL" "$MOUNT/boot/retroos/kernel.elf"
+install -m 644 "$GRUB_CFG" "$MOUNT/boot/grub/grub.cfg"
 
 echo "Installing BIOS GRUB"
-mount "$PART" "$MOUNT"
-MOUNTED=1
 grub-install \
     --target=i386-pc \
     --boot-directory="$MOUNT/boot" \
-    --modules="biosdisk part_msdos ext2 multiboot search search_fs_file configfile normal all_video" \
+    --disk-module=biosdisk \
+    --modules="biosdisk part_msdos fat ext2 multiboot search search_fs_file configfile normal all_video" \
     --no-floppy \
     --recheck \
     "$LOOP"
