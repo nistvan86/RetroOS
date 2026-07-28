@@ -285,6 +285,10 @@ pub struct VgaState {
     pub svga_bpp: u8,
     /// Current window-A bank (64 KB granule) the 0xA0000 window aliases.
     pub svga_bank: u16,
+    /// Pages currently backing the synthetic linear framebuffer. This starts
+    /// at the visible mode size and grows if a DPMI client maps more of the
+    /// advertised VBE aperture.
+    pub svga_alloc_pages: usize,
     /// This address space's A0000 window is mapped as the planar trap
     /// (present=0 + MMIO marker), so kernel-side writes must route through
     /// `vram_write` instead of raw guest-memory stores.
@@ -338,6 +342,7 @@ impl VgaState {
             svga_h: 0,
             svga_bpp: 0,
             svga_bank: 0,
+            svga_alloc_pages: 0,
             a0000_trapped: false,
         }
     }
@@ -942,15 +947,14 @@ fn disarm_planar<A: crate::Arch>(machine: &mut A, vga: &mut VgaState, _regs: &mu
 const SVGA_LFB_BASE: usize = 0x4000_0000; // 1 GB
 const SVGA_WINDOW: usize = 0x10000; // 64 KB VBE bank granule
 const WINDOW_PAGES: usize = SVGA_WINDOW >> 12;
-// Address space reserved for the substitute VBE LFB. A client commonly maps
-// PhysBasePtr before setting the mode, so recognition cannot depend on an
-// active allocation. The largest mode currently exposed needs under 2 MiB.
-const SVGA_LFB_RESERVE: usize = 16 * 1024 * 1024;
+// Address-space capacity advertised by VBE 4F00h (0x80 × 64 KiB). Backing
+// pages are committed on demand: the visible mode initially, then any larger
+// DPMI physical mapping requested by a client.
+pub const SVGA_LFB_BYTES: usize = 8 * 1024 * 1024;
 
-/// Whole 64 KB banks a `w`×`h`×`bpp` framebuffer needs.
-fn svga_banks(w: u16, h: u16, bpp: u8) -> usize {
+fn svga_mode_pages(w: u16, h: u16, bpp: u8) -> usize {
     let bytes = w as usize * h as usize * (bpp as usize).div_ceil(8);
-    bytes.div_ceil(SVGA_WINDOW)
+    bytes.div_ceil(SVGA_WINDOW) * WINDOW_PAGES
 }
 
 /// VBE's `PhysBasePtr`. RetroOS's DOS guest has one paged address space shared
@@ -971,7 +975,30 @@ pub fn svga_lfb_reserved_contains(addr: u32, size: u32) -> bool {
     let Some(end) = addr.checked_add(size) else {
         return false;
     };
-    addr >= base && end <= base + SVGA_LFB_RESERVE as u32
+    addr >= base && end <= base + SVGA_LFB_BYTES as u32
+}
+
+/// Commit enough of the advertised synthetic LFB to cover a client mapping.
+/// Returns false when no VBE mode is active or the request is outside it.
+pub fn svga_ensure_lfb<A: crate::Arch>(
+    machine: &mut A,
+    vga: &mut VgaState,
+    addr: u32,
+    size: u32,
+) -> bool {
+    if vga.svga_w == 0 || !svga_lfb_reserved_contains(addr, size) {
+        return false;
+    }
+    let offset = (addr as usize).saturating_sub(SVGA_LFB_BASE);
+    let required_pages = offset.saturating_add(size as usize).div_ceil(0x1000);
+    if required_pages > vga.svga_alloc_pages {
+        machine.map_fresh_range(
+            (SVGA_LFB_BASE >> 12) + vga.svga_alloc_pages,
+            required_pages - vga.svga_alloc_pages,
+        );
+        vga.svga_alloc_pages = required_pages;
+    }
+    true
 }
 
 /// Whether a DPMI physical-map request lies wholly inside the currently
@@ -987,20 +1014,24 @@ pub fn svga_lfb_contains(vga: &VgaState, addr: u32, size: u32) -> bool {
     let Some(end) = addr.checked_add(size) else {
         return false;
     };
-    let mapped = svga_banks(vga.svga_w, vga.svga_h, vga.svga_bpp) * SVGA_WINDOW;
-    addr >= base && end <= base.saturating_add(mapped as u32)
+    addr >= base
+        && end <= base.saturating_add((vga.svga_alloc_pages * 0x1000) as u32)
 }
 
 /// Enter a banked SVGA mode (INT 10h AX=4F02h): back the framebuffer with fresh
 /// user RAM and alias the 0xA0000 window onto bank 0.
 pub fn svga_set_mode<A: crate::Arch>(machine: &mut A, pc: &mut PcMachine, w: u16, h: u16, bpp: u8) {
-    let pages = svga_banks(w, h, bpp) * WINDOW_PAGES;
+    if pc.vga.svga_w != 0 {
+        svga_leave(machine, pc);
+    }
+    let pages = svga_mode_pages(w, h, bpp);
     machine.map_fresh_range(SVGA_LFB_BASE >> 12, pages);
     machine.copy_page_entries(SVGA_LFB_BASE >> 12, A0000 >> 12, WINDOW_PAGES);
     pc.vga.svga_w = w;
     pc.vga.svga_h = h;
     pc.vga.svga_bpp = bpp;
     pc.vga.svga_bank = 0;
+    pc.vga.svga_alloc_pages = pages;
     // A VBE set-mode bypasses on_set_mode, so clear any stale planar marker.
     pc.vga.a0000_trapped = false;
 }
@@ -1022,7 +1053,7 @@ pub fn svga_leave<A: crate::Arch>(machine: &mut A, pc: &mut PcMachine) {
     if pc.vga.svga_w == 0 {
         return;
     }
-    let pages = svga_banks(pc.vga.svga_w, pc.vga.svga_h, pc.vga.svga_bpp) * WINDOW_PAGES;
+    let pages = pc.vga.svga_alloc_pages;
     // Detach the window alias (drops its shared ref on the current bank), then
     // free the framebuffer region — frees the frames and leaves the entries
     // absent, the only sane "free" for an allocated RAM region.
@@ -1032,6 +1063,7 @@ pub fn svga_leave<A: crate::Arch>(machine: &mut A, pc: &mut PcMachine) {
     pc.vga.svga_h = 0;
     pc.vga.svga_bpp = 0;
     pc.vga.svga_bank = 0;
+    pc.vga.svga_alloc_pages = 0;
     pc.vga.a0000_trapped = false;
 }
 

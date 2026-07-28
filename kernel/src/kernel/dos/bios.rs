@@ -1202,7 +1202,10 @@ fn vbe_controller_info<A: crate::Arch>(machine: &mut A, regs: &mut Regs) {
     // VideoModePtr (0x0E) → mode list at ES:(DI+0x20), in the reserved area.
     let list_off = (regs.rdi as u16).wrapping_add(0x20);
     machine.write::<u32>(lin + 0x0E, ((regs.es as u32 & 0xFFFF) << 16) | list_off as u32);
-    machine.write::<u16>(lin + 0x12, 0x80); // total memory: 0x80 × 64 KB = 8 MB
+    machine.write::<u16>(
+        lin + 0x12,
+        (super::machine::vga::SVGA_LFB_BYTES / 0x10000) as u16,
+    );
     let mut p = lin + 0x20;
     for &(num, ..) in VBE_MODES {
         machine.write::<u16>(p, num);

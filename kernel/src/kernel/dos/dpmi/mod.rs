@@ -958,6 +958,14 @@ fn dpmi_api_inner<A: crate::Arch>(machine: &mut A, dos: &mut thread::DosState<A>
 
             let synthetic_lfb =
                 super::machine::vga::svga_lfb_reserved_contains(physical, size);
+            if synthetic_lfb {
+                super::machine::vga::svga_ensure_lfb(
+                    machine,
+                    &mut dos.pc.vga,
+                    physical,
+                    size,
+                );
+            }
             if synthetic_lfb
                 && super::machine::vga::svga_lfb_contains(&dos.pc.vga, physical, size)
             {
@@ -1049,6 +1057,12 @@ pub(super) fn refresh_svga_lfb_mappings<A: crate::Arch>(
             continue;
         }
         let size = mapping.page_count.saturating_mul(0x1000);
+        super::machine::vga::svga_ensure_lfb(
+            machine,
+            &mut dos.pc.vga,
+            mapping.source_page_base,
+            size,
+        );
         if !super::machine::vga::svga_lfb_contains(
             &dos.pc.vga,
             mapping.source_page_base,
