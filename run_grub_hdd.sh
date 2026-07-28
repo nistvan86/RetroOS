@@ -9,6 +9,7 @@ AUDIO_BACKEND="${RETROOS_AUDIO_BACKEND:-pa}"
 HOSTFS_DIR="${RETROOS_HOSTFS_DIR:-}"
 QEMU_AUDIO_ENV=()
 HOSTFS_ARGS=()
+VGA_ARGS=()
 HOSTFS_PID=""
 HOSTFS_SOCKET=""
 
@@ -21,6 +22,7 @@ if [ "${1:-}" = "--help" ]; then
     echo "  QEMU_DISPLAY       QEMU display backend (default: sdl)"
     echo "  RETROOS_AUDIO_BACKEND"
     echo "                      QEMU audio backend (default: pa)"
+    echo "  VGABIOS_ROM         SeaVGABIOS ROM override (default: repo-local 1.17+ ROM)"
     echo "  RETROOS_HOSTFS_DIR  Host directory exposed at C:\\HOST (disabled by default)"
     echo
     echo "The disk runs with snapshot=on, so the source image is not modified."
@@ -34,6 +36,34 @@ command -v qemu-system-i386 >/dev/null ||
 [ -f "$IMAGE" ] ||
     { echo "Missing HDD image: $IMAGE" >&2; exit 1; }
 
+build_vga_rom_args() {
+    local rom="${VGABIOS_ROM:-}"
+    local bundled="$ROOT/third_party/vgabios/vgabios-stdvga.bin"
+
+    if [ -z "$rom" ] && [ -f "$bundled" ]; then
+        rom="$bundled"
+    fi
+    if [ -n "$rom" ]; then
+        [ -f "$rom" ] ||
+            { echo "VGABIOS_ROM does not exist: $rom" >&2; exit 1; }
+        VGA_ARGS=(-device "VGA,romfile=$rom")
+        return
+    fi
+
+    VGA_ARGS=(-vga std)
+    local sys=/usr/share/seabios/vgabios-stdvga.bin
+    [ -f "$sys" ] || return
+    local version
+    version="$(strings "$sys" | grep -oE '^1\.[0-9]+\.[0-9]+' | head -1)"
+    [ -n "$version" ] || return
+    if [ "$version" != "1.17.0" ] &&
+       [ "$(printf '%s\n1.17.0\n' "$version" | sort -V | head -1)" = "$version" ]; then
+        echo "run_grub_hdd.sh: WARNING: system SeaVGABIOS $version lacks VBE palette function 4F09h." >&2
+        echo "Place SeaVGABIOS 1.17.0+ at third_party/vgabios/vgabios-stdvga.bin" >&2
+        echo "or set VGABIOS_ROM to its path." >&2
+    fi
+}
+
 cleanup() {
     if [ -n "$HOSTFS_PID" ]; then
         kill "$HOSTFS_PID" 2>/dev/null || true
@@ -44,6 +74,8 @@ cleanup() {
     fi
 }
 trap cleanup EXIT
+
+build_vga_rom_args
 
 if [ -n "$HOSTFS_DIR" ]; then
     [ -d "$HOSTFS_DIR" ] ||
@@ -67,7 +99,7 @@ env "${QEMU_AUDIO_ENV[@]}" qemu-system-i386 \
     -drive "file=$IMAGE,format=raw,if=ide,snapshot=on" \
     -boot c \
     -debugcon stdio \
-    -vga std \
+    "${VGA_ARGS[@]}" \
     -display "${QEMU_DISPLAY:-sdl}" \
     -audiodev "$AUDIO_BACKEND,id=snd0" \
     -device intel-hda \
