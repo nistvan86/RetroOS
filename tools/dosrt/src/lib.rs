@@ -408,6 +408,19 @@ pub mod dos {
         if r.flags & 1 != 0 { None } else { Some(r.eax as u16) }
     }
 
+    /// INT 21h AH=3Ch create/truncate. `path` must be NUL-terminated.
+    pub fn create(path: &[u8]) -> Option<u16> {
+        let seg = xfer_seg();
+        let n = core::cmp::min(path.len(), XFER_LEN);
+        unsafe { core::ptr::copy_nonoverlapping(path.as_ptr(), conv_ptr(seg), n); }
+        let mut r = Rmcs::default();
+        r.eax = 0x3C00;
+        r.ecx = 0;                                  // normal file attributes
+        r.ds = seg; r.edx = 0;
+        dpmi::sim_int(0x21, &mut r);
+        if r.flags & 1 != 0 { None } else { Some(r.eax as u16) }
+    }
+
     /// INT 21h AH=3Fh read, chunked through the conv block. Bytes read.
     pub fn read(handle: u16, buf: &mut [u8]) -> usize {
         let seg = xfer_seg();
@@ -429,6 +442,31 @@ pub mod dos {
             }
             done += got;
             if got < want as usize { break; }         // short read = EOF
+        }
+        done
+    }
+
+    /// INT 21h AH=40h write, chunked through the conventional transfer block.
+    /// Returns bytes written (possibly short on error).
+    pub fn write(handle: u16, buf: &[u8]) -> usize {
+        let seg = xfer_seg();
+        let cp = conv_ptr(seg);
+        let mut done = 0usize;
+        while done < buf.len() {
+            let want = core::cmp::min(buf.len() - done, XFER_LEN) as u16;
+            unsafe {
+                core::ptr::copy_nonoverlapping(buf.as_ptr().add(done), cp, want as usize);
+            }
+            let mut r = Rmcs::default();
+            r.eax = 0x4000;
+            r.ebx = handle as u32;
+            r.ecx = want as u32;
+            r.ds = seg; r.edx = 0;
+            dpmi::sim_int(0x21, &mut r);
+            if r.flags & 1 != 0 { break; }
+            let put = r.eax as u16 as usize;
+            done += put;
+            if put < want as usize { break; }
         }
         done
     }

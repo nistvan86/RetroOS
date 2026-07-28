@@ -185,6 +185,8 @@ _EXTRA_FILES = {
     "//test/dos/trexec:trexec_com":       "TESTS/TREXEC.COM",
     "//test/dos/hello32_linux:hello32_linux": "TESTS/HI.ELF",
     "//test/dos/hello64_linux:hello64_linux": "TESTS/HI64.ELF",
+    # Protected-mode VBE/DPMI physical-framebuffer diagnostic for real hardware.
+    "//test/dos/vbelfb:vbelfb_exe":          "TESTS/VBELFB.EXE",
     # DPMI smoke-test fixture (compiled by BCC in test/dpmi_smoke.sh).
     "test/dpmi/hello.c":                    "TESTS/DPMIHI.C",
     # Japheth's HX DPMI conformance probe (freeware; see test/dpmi/HX-CREDITS.txt).

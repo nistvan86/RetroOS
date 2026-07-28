@@ -24,6 +24,7 @@
 
 #include <dos.h>
 #include <conio.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -202,21 +203,47 @@ static void list_modes(void)
 {
     u16 far *list;
     u16 m;
+    FILE *report;
 
-    if (!get_ctrl_info()) { cprintf("4F00 (controller info) failed\r\n"); return; }
+    report = fopen("C:\\HOST\\VBEMODES.TXT", "w");
+    if (!get_ctrl_info()) {
+        cprintf("4F00 (controller info) failed\r\n");
+        if (report) {
+            fprintf(report, "4F00 (controller info) failed\r\n");
+            fclose(report);
+        }
+        return;
+    }
     cprintf("VBE %u.%u  sig=%c%c%c%c  vram=%lu KB\r\n",
             vi.version >> 8, vi.version & 0xFF,
             vi.signature[0], vi.signature[1], vi.signature[2], vi.signature[3],
             (u32) vi.total_memory * 64UL);
+    if (report)
+        fprintf(report, "VBE %u.%u  sig=%c%c%c%c  vram=%lu KB\r\n",
+                vi.version >> 8, vi.version & 0xFF,
+                vi.signature[0], vi.signature[1], vi.signature[2], vi.signature[3],
+                (u32) vi.total_memory * 64UL);
 
     list = (u16 far *) MK_FP((u16)(vi.mode_ptr >> 16), (u16) vi.mode_ptr);
     cprintf("mode  res        bpp model\r\n");
+    if (report) fprintf(report, "mode  res        bpp model\r\n");
     while ((m = *list++) != 0xFFFF) {
         if (!get_mode_info(m)) continue;
         cprintf(" %03X  %4ux%-4u  %3u  %s\r\n",
                 m, mi.x_res, mi.y_res, mi.bpp,
                 mi.memory_model == 6 ? "direct" :
                 mi.memory_model == 4 ? "packed" : "other");
+        if (report)
+            fprintf(report, " %03X  %4ux%-4u  %3u  %s\r\n",
+                    m, mi.x_res, mi.y_res, mi.bpp,
+                    mi.memory_model == 6 ? "direct" :
+                    mi.memory_model == 4 ? "packed" : "other");
+    }
+    if (report) {
+        fclose(report);
+        cprintf("\r\nSaved full report to C:\\HOST\\VBEMODES.TXT\r\n");
+    } else {
+        cprintf("\r\nCould not create C:\\HOST\\VBEMODES.TXT\r\n");
     }
 }
 

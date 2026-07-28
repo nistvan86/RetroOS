@@ -1,0 +1,37 @@
+load("@rules_rust//rust:defs.bzl", "rust_static_library")
+load("//tools/dosrt:retro.bzl", "retro_lib")
+
+rust_static_library(
+    name = "vbelfb_lib",
+    srcs = ["src/main.rs"],
+    crate_name = "vbelfb",
+    edition = "2024",
+    rustc_flags = [
+        "-Cpanic=abort",
+        "-Copt-level=z",
+        "-Crelocation-model=pie",
+    ],
+    deps = ["//tools/dosrt:dosrt_lib"],
+)
+
+retro_lib(
+    name = "vbelfb_retro",
+    lib = ":vbelfb_lib",
+)
+
+genrule(
+    name = "vbelfb_elf",
+    srcs = [":vbelfb_retro", "vbelfb.ld"],
+    outs = ["vbelfb.elf"],
+    cmd = "ld -m elf_i386 -pie --no-dynamic-linker --hash-style=sysv " +
+          "--gc-sections -T $(location vbelfb.ld) -u _start " +
+          "$(location :vbelfb_retro) -o $@",
+)
+
+genrule(
+    name = "vbelfb_exe",
+    srcs = ["//tools/dosrt:stub_exe", ":vbelfb_elf"],
+    outs = ["VBELFB.EXE"],
+    cmd = "cat $(location //tools/dosrt:stub_exe) $(location :vbelfb_elf) > $@",
+    visibility = ["//visibility:public"],
+)
