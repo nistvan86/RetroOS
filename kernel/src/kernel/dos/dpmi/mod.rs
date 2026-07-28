@@ -956,17 +956,34 @@ fn dpmi_api_inner<A: crate::Arch>(machine: &mut A, dos: &mut thread::DosState<A>
                 return thread::KernelAction::Done;
             };
 
-            let physical_page = (physical & !0xFFF) as u64 >> 12;
-            machine.map_phys_range(
-                (virtual_base >> 12) as usize,
-                page_count as usize,
-                physical_page,
-                arch_abi::MAP_PHYS_CACHE_DISABLE | arch_abi::MAP_PHYS_FOREIGN,
-            );
+            let synthetic_lfb =
+                super::machine::vga::svga_lfb_reserved_contains(physical, size);
+            if synthetic_lfb
+                && super::machine::vga::svga_lfb_contains(&dos.pc.vga, physical, size)
+            {
+                // The substitute VBE provider reports a guest-linear address
+                // as PhysBasePtr. Alias its existing RAM pages so writes made
+                // through the DPMI mapping reach the framebuffer scanout.
+                machine.copy_page_entries(
+                    ((physical & !0xFFF) >> 12) as usize,
+                    (virtual_base >> 12) as usize,
+                    page_count as usize,
+                );
+            } else if !synthetic_lfb {
+                let physical_page = (physical & !0xFFF) as u64 >> 12;
+                machine.map_phys_range(
+                    (virtual_base >> 12) as usize,
+                    page_count as usize,
+                    physical_page,
+                    arch_abi::MAP_PHYS_CACHE_DISABLE | arch_abi::MAP_PHYS_FOREIGN,
+                );
+            }
             dpmi.phys_mappings[slot] = Some(PhysicalMapping {
                 returned_linear,
                 virtual_page_base: virtual_base,
                 page_count,
+                source_page_base: physical & !0xFFF,
+                synthetic_lfb,
             });
             dos.dpmi_phys_next = virtual_base;
             regs.rbx =
@@ -1016,6 +1033,35 @@ fn dpmi_api_inner<A: crate::Arch>(machine: &mut A, dos: &mut thread::DosState<A>
         regs.rsi as u16, regs.rdi as u16, regs.ds as u16, regs.es as u16);
     trace_client_selector_leak("dpmi_int31.exit", regs);
     thread::KernelAction::Done
+}
+
+/// Reconnect DPMI mappings made against the substitute VBE PhysBasePtr before
+/// the selected mode allocated its backing pages.
+pub(super) fn refresh_svga_lfb_mappings<A: crate::Arch>(
+    machine: &mut A,
+    dos: &mut super::DosState<A>,
+) {
+    let Some(dpmi) = dos.dpmi.as_ref() else {
+        return;
+    };
+    for mapping in dpmi.phys_mappings.iter().flatten() {
+        if !mapping.synthetic_lfb {
+            continue;
+        }
+        let size = mapping.page_count.saturating_mul(0x1000);
+        if !super::machine::vga::svga_lfb_contains(
+            &dos.pc.vga,
+            mapping.source_page_base,
+            size,
+        ) {
+            continue;
+        }
+        machine.copy_page_entries(
+            (mapping.source_page_base >> 12) as usize,
+            (mapping.virtual_page_base >> 12) as usize,
+            mapping.page_count as usize,
+        );
+    }
 }
 
 // ============================================================================

@@ -1267,6 +1267,7 @@ fn vbe_set_mode<A: crate::Arch>(machine: &mut A, dos: &mut super::DosState<A>, r
         return false;
     };
     super::machine::vga::svga_set_mode(machine, &mut dos.pc, w, h, bpp);
+    super::dpmi::refresh_svga_lfb_mappings(machine, dos);
     true
 }
 

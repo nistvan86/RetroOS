@@ -173,6 +173,10 @@ pub(super) struct PhysicalMapping {
     pub(super) virtual_page_base: u32,
     /// Number of 4 KiB pages in the mapping.
     pub(super) page_count: u32,
+    /// Page-aligned address supplied by the client.
+    pub(super) source_page_base: u32,
+    /// The source is substitute-VBE guest RAM, not host physical memory.
+    pub(super) synthetic_lfb: bool,
 }
 
 impl DpmiState {

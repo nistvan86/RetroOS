@@ -942,6 +942,10 @@ fn disarm_planar<A: crate::Arch>(machine: &mut A, vga: &mut VgaState, _regs: &mu
 const SVGA_LFB_BASE: usize = 0x4000_0000; // 1 GB
 const SVGA_WINDOW: usize = 0x10000; // 64 KB VBE bank granule
 const WINDOW_PAGES: usize = SVGA_WINDOW >> 12;
+// Address space reserved for the substitute VBE LFB. A client commonly maps
+// PhysBasePtr before setting the mode, so recognition cannot depend on an
+// active allocation. The largest mode currently exposed needs under 2 MiB.
+const SVGA_LFB_RESERVE: usize = 16 * 1024 * 1024;
 
 /// Whole 64 KB banks a `w`×`h`×`bpp` framebuffer needs.
 fn svga_banks(w: u16, h: u16, bpp: u8) -> usize {
@@ -955,6 +959,36 @@ fn svga_banks(w: u16, h: u16, bpp: u8) -> usize {
 /// directly through its flat selector — no physical→linear mapping needed.
 pub const fn svga_lfb_base() -> u32 {
     SVGA_LFB_BASE as u32
+}
+
+/// Whether an address range belongs to the substitute VBE provider, including
+/// before a mode has allocated its backing pages.
+pub fn svga_lfb_reserved_contains(addr: u32, size: u32) -> bool {
+    if size == 0 {
+        return false;
+    }
+    let base = SVGA_LFB_BASE as u32;
+    let Some(end) = addr.checked_add(size) else {
+        return false;
+    };
+    addr >= base && end <= base + SVGA_LFB_RESERVE as u32
+}
+
+/// Whether a DPMI physical-map request lies wholly inside the currently
+/// allocated synthetic SVGA framebuffer. Unlike a real video card's LFB,
+/// this is guest RAM already mapped at [`SVGA_LFB_BASE`]; DPMI 0800h must
+/// alias those page entries rather than map the same number as host physical
+/// memory.
+pub fn svga_lfb_contains(vga: &VgaState, addr: u32, size: u32) -> bool {
+    if vga.svga_w == 0 || !svga_lfb_reserved_contains(addr, size) {
+        return false;
+    }
+    let base = SVGA_LFB_BASE as u32;
+    let Some(end) = addr.checked_add(size) else {
+        return false;
+    };
+    let mapped = svga_banks(vga.svga_w, vga.svga_h, vga.svga_bpp) * SVGA_WINDOW;
+    addr >= base && end <= base.saturating_add(mapped as u32)
 }
 
 /// Enter a banked SVGA mode (INT 10h AX=4F02h): back the framebuffer with fresh
