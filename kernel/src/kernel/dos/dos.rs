@@ -1208,6 +1208,39 @@ fn int_21h<A: crate::Arch>(machine: &mut A, kt: &mut thread::KernelThread<A>, do
             regs.clear_flag32(1);
             thread::KernelAction::Done
         }
+        // AH=0x39: Create directory (DS:DX=ASCIIZ path). Directories on the
+        // memory-backed C: root live in the VFS RAM overlay.
+        0x39 => {
+            let addr = linear(machine, dos, regs, regs.ds as u16, regs.rdx as u32);
+            let mut name = [0u8; dfs::DFS_PATH_MAX];
+            let mut i = 0;
+            while i < dfs::DFS_PATH_MAX - 1 {
+                let ch = machine.read::<u8>((addr + i as u32) as usize);
+                if ch == 0 { break; }
+                name[i] = ch;
+                i += 1;
+            }
+            let rv = match dfs_create_path(dos, &name[..i]) {
+                Ok((path, len)) => {
+                    let parent_end = path[..len].iter().rposition(|&b| b == b'/').unwrap_or(0);
+                    dfs::ci::invalidate(&path[..parent_end]);
+                    crate::kernel::vfs::mkdir(&path[..len])
+                }
+                Err(e) => -e,
+            };
+            if rv >= 0 {
+                regs.clear_flag32(1);
+            } else {
+                let err = match rv {
+                    -2 => 3,  // parent path not found
+                    -17 => 5, // directory/file already exists
+                    _ => dos_error_from_errno(rv),
+                };
+                regs.rax = (regs.rax & !0xFFFF) | err as u64;
+                regs.set_flag32(1);
+            }
+            thread::KernelAction::Done
+        }
         // AH=0x3B: Change directory (DS:DX=ASCIIZ path)
         0x3B => {
             let addr = linear(machine, dos, regs, regs.ds as u16, regs.rdx as u32);
@@ -2175,12 +2208,17 @@ fn int_21h<A: crate::Arch>(machine: &mut A, kt: &mut thread::KernelThread<A>, do
             // Map drive: 0=default(C), 1=A, 2=B, 3=C
             let drive = if dl == 0 { 3 } else { dl };
             if drive == 3 {
-                // C: drive — report fake 16MB disk, 8MB free
-                // 512 bytes/sector, 8 sectors/cluster (4KB), 4096 total clusters = 16MB
-                regs.rax = (regs.rax & !0xFFFF) | 8;    // AX = sectors per cluster
-                regs.rbx = (regs.rbx & !0xFFFF) | 2048; // BX = free clusters
-                regs.rcx = (regs.rcx & !0xFFFF) | 512;  // CX = bytes per sector
-                regs.rdx = (regs.rdx & !0xFFFF) | 4096; // DX = total clusters
+                // C: may be the growable RAM overlay. Report free physical
+                // pages as 4 KiB clusters instead of the old fixed 8 MiB
+                // fiction. RAM-overlay Vec growth is demand-backed by these
+                // same pages, so this is a conservative capacity the kernel
+                // can actually supply. DOS limits both cluster counts to 16
+                // bits, which caps the visible drive at just under 256 MiB.
+                let free_clusters = machine.free_page_count().min(u16::MAX as usize) as u16;
+                regs.rax = (regs.rax & !0xFFFF) | 8; // AX = sectors per cluster
+                regs.rbx = (regs.rbx & !0xFFFF) | free_clusters as u64;
+                regs.rcx = (regs.rcx & !0xFFFF) | 512; // CX = bytes per sector
+                regs.rdx = (regs.rdx & !0xFFFF) | u16::MAX as u64;
             } else {
                 // A:/B: or unknown — invalid drive
                 regs.rax = (regs.rax & !0xFFFF) | 0xFFFF;

@@ -20,7 +20,7 @@
 //! filesystems never call back into `vfs`, so holding the lock across `fs.read`/
 //! `fs.open` is safe.
 
-use alloc::collections::BTreeMap;
+use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::vec::Vec;
 use spin::Mutex;
 use crate::kernel::thread::{FdKind, MAX_FDS};
@@ -292,6 +292,9 @@ struct Vfs {
     next_seq: u32,
     /// Writable file overlay — persists across open/close cycles.
     ram_files: BTreeMap<Vec<u8>, Vec<u8>>,
+    /// Directories created in the volatile overlay. Paths have no trailing
+    /// slash, matching the VFS directory APIs.
+    ram_dirs: BTreeSet<Vec<u8>>,
     /// Global file table — slot is free when refcount == 0.
     file_table: [FileEntry; MAX_OPEN_FILES],
     dir_cache: DirCache,
@@ -313,6 +316,7 @@ impl Vfs {
             mounts: Vec::new(),
             next_seq: 0,
             ram_files: BTreeMap::new(),
+            ram_dirs: BTreeSet::new(),
             file_table: [EMPTY; MAX_OPEN_FILES],
             dir_cache: DirCache::new(),
         }
@@ -560,7 +564,19 @@ impl Vfs {
 
         let mut entries: Vec<DirEntry> = Vec::new();
 
-        // RAM overlay files (writable layer, highest priority).
+        // RAM overlay directories and files (writable layer, highest priority).
+        for key in self.ram_dirs.iter() {
+            if let Some(basename) = entry_in_ram_dir(key, dir)
+                && !dir_entries_has(&entries, basename) {
+                let len = basename.len().min(100);
+                let mut de = DirEntry {
+                    name: [0; 100], name_len: len, size: 0,
+                    is_dir: true, mode: 0o755, mtime: 0,
+                };
+                de.name[..len].copy_from_slice(&basename[..len]);
+                entries.push(de);
+            }
+        }
         for (key, data) in self.ram_files.iter() {
             if let Some(basename) = entry_in_ram_dir(key, dir)
                 && !dir_entries_has(&entries, basename) {
@@ -629,6 +645,9 @@ impl Vfs {
     }
 
     fn dir_exists(&self, path: &[u8]) -> bool {
+        if path.is_empty() || self.ram_dirs.contains(path) {
+            return true;
+        }
         // True if any member of the group has this dir. A mount root (and the
         // VFS root) is structurally a directory — a member with an empty
         // subpath answers true without querying the backing fs, which avoids
@@ -637,6 +656,27 @@ impl Vfs {
         self.resolve_members(path, ALIAS_DEPTH, &mut |_idx, fs, subpath| {
             if subpath.is_empty() || fs.dir_exists(subpath) { Some(()) } else { None }
         }).is_some()
+    }
+
+    fn mkdir(&mut self, path: &[u8]) -> i32 {
+        if path.is_empty() || self.ram_dirs.contains(path) || self.ram_files.contains_key(path) {
+            return -17; // EEXIST
+        }
+        if self.resolve_members(path, ALIAS_DEPTH, &mut |_idx, fs, subpath| {
+            if fs.dir_exists(subpath) { Some(()) } else { None }
+        }).is_some() {
+            return -17;
+        }
+
+        let parent = path.iter().rposition(|&b| b == b'/')
+            .map_or(&b""[..], |i| &path[..i]);
+        if !self.dir_exists(parent) {
+            return -2; // ENOENT (DOS maps this to path not found below)
+        }
+
+        self.ram_dirs.insert(path.to_vec());
+        self.invalidate_dir_cache();
+        0
     }
 
     // ── open / create / read / write / seek ──────────────────────────────
@@ -1005,9 +1045,17 @@ fn mount_child_in_dir<'a>(prefix: &'a [u8], dir: &[u8]) -> Option<&'a [u8]> {
 }
 
 fn entry_in_ram_dir<'a>(entry_name: &'a [u8], dir: &[u8]) -> Option<&'a [u8]> {
-    if entry_name.len() <= dir.len() { return None; }
-    if !dir.is_empty() && !eq_ignore_case(&entry_name[..dir.len()], dir) { return None; }
-    let rest = &entry_name[dir.len()..];
+    let dir = dir.strip_suffix(b"/").unwrap_or(dir);
+    let rest = if dir.is_empty() {
+        entry_name
+    } else {
+        if entry_name.len() <= dir.len() + 1
+            || !eq_ignore_case(&entry_name[..dir.len()], dir)
+            || entry_name[dir.len()] != b'/' {
+            return None;
+        }
+        &entry_name[dir.len() + 1..]
+    };
     if rest.contains(&b'/') { return None; }
     Some(rest)
 }
@@ -1176,6 +1224,11 @@ pub fn readdir(dir: &[u8], index: usize) -> Option<DirEntry> {
 /// Check if a directory exists on a mounted filesystem.
 pub fn dir_exists(path: &[u8]) -> bool {
     VFS.lock().dir_exists(path)
+}
+
+/// Create a volatile RAM-backed directory. The parent must already exist.
+pub fn mkdir(path: &[u8]) -> i32 {
+    VFS.lock().mkdir(path)
 }
 
 /// If `parent/<name>` (case-insensitive) is a mount point, return its directory
