@@ -21,6 +21,15 @@ REPO_ROOT="${RETROOS_REPO_ROOT:-$(git rev-parse --show-toplevel)}"
     --exec boot/TESTS/VBELFB.EXE
 ```
 
+For a derived kernel, override both its Bazel label and output artifact while
+retaining the same deploy/reboot/listen transaction:
+
+```bash
+"$REPO_ROOT/.agents/skills/test-retroos-sejt/scripts/iterate.sh" \
+    --target //kernel:kernel_elf_pxe_netlog_duke \
+    --artifact bazel-bin/kernel/kernel_pxe_netlog_duke.elf
+```
+
 The script runs the ordinary and PXE/RLOG builds, inspects the Pi runtime,
 atomically deploys `kernel_pxe_netlog.elf`, configures the selected live GRUB
 entry, starts RLOG, waits for `RLOG listener ready`, sends exactly one RCTL

@@ -13,20 +13,47 @@ readonly REMOTE_RLOG_OUTPUT="${RETROOS_RLOG_REMOTE_OUTPUT:-/tmp/retroos-rlog-cur
 readonly DEPLOY="${REPO_ROOT}/.agents/skills/deploy-retroos-kernel/scripts/deploy_kernel.sh"
 readonly REBOOT="${REPO_ROOT}/.agents/skills/reboot-retroos-sejt/scripts/reboot_sejt.sh"
 readonly RECEIVER="${REPO_ROOT}/tools/pxe_rlog_receiver.py"
-readonly ARTIFACT="${REPO_ROOT}/bazel-bin/kernel/kernel_pxe_netlog.elf"
+artifact="${REPO_ROOT}/bazel-bin/kernel/kernel_pxe_netlog.elf"
+build_target="//kernel:kernel_elf_pxe_netlog"
 
 usage() {
-    printf 'Usage: %s [--exec embedded-vfs-path]\n' "${0##*/}" >&2
+    printf 'Usage: %s [--exec embedded-vfs-path] [--target bazel-label --artifact path]\n' "${0##*/}" >&2
 }
 
 exec_path=
-case "${1:-}" in
-    "") [[ $# -eq 0 ]] || { usage; exit 2; } ;;
-    --exec)
-        [[ $# -eq 2 && -n "${2:-}" ]] || { usage; exit 2; }
-        exec_path=$2
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --exec)
+            [[ $# -ge 2 && -n "${2:-}" ]] || { usage; exit 2; }
+            exec_path=$2
+            shift 2
+            ;;
+        --target)
+            [[ $# -ge 2 && -n "${2:-}" ]] || { usage; exit 2; }
+            build_target=$2
+            shift 2
+            ;;
+        --artifact)
+            [[ $# -ge 2 && -n "${2:-}" ]] || { usage; exit 2; }
+            artifact=$2
+            [[ "$artifact" = /* ]] || artifact="${REPO_ROOT}/${artifact}"
+            shift 2
+            ;;
+        *) usage; exit 2 ;;
+    esac
+done
+
+if [[ "$build_target" != //* || "$build_target" == *[!A-Za-z0-9_./:+@-]* ]]; then
+    printf 'Unsafe Bazel target: %s\n' "$build_target" >&2
+    exit 2
+fi
+
+case "$artifact" in
+    "${REPO_ROOT}"/*) ;;
+    *)
+        printf 'Artifact must be inside the repository: %s\n' "$artifact" >&2
+        exit 2
         ;;
-    *) usage; exit 2 ;;
 esac
 
 if [[ -n "$exec_path" && ! "$exec_path" =~ ^[A-Za-z0-9_./:\\-]+$ ]]; then
@@ -60,14 +87,19 @@ trap cleanup EXIT HUP INT TERM
 
 cd "$REPO_ROOT"
 
-printf '%s\n' '==> Building ordinary and PXE/RLOG kernels'
-bazelisk build //kernel:kernel_elf //kernel:kernel_elf_pxe_netlog
+printf '==> Building ordinary kernel and %s\n' "$build_target"
+bazelisk build //kernel:kernel_elf "$build_target"
+
+[[ -f "$artifact" ]] || {
+    printf 'Built artifact not found: %s\n' "$artifact" >&2
+    exit 1
+}
 
 printf '%s\n' '==> Inspecting PXE runtime'
 "$DEPLOY" --status
 
 printf '%s\n' '==> Deploying PXE/RLOG kernel with the normal GRUB entry'
-"$DEPLOY" "$ARTIFACT"
+"$DEPLOY" "$artifact"
 
 if [[ -n "$exec_path" ]]; then
     printf '==> Installing temporary retroos.exec GRUB entry: %s\n' "$exec_path"
