@@ -272,6 +272,31 @@ rust_binary(
     ],
 )
 
+rust_binary(
+    name = "kernel_elf_pxe_netlog_duke_bin",
+    srcs = ["metal_entry.rs"],
+    crate_name = "kernel_metal_duke",
+    edition = "2024",
+    compile_data = [":kernel_ld", ":entry", ":bootfs_duke_obj", "//third_party/lwext4:lwext4_obj"],
+    rustc_flags = [
+        "-Cpanic=abort",
+        "-Crelocation-model=static",
+        "-Clink-self-contained=+linker",
+        "-Clinker-flavor=ld.lld",
+        "-Clinker=rust-lld",
+        "-Clink-arg=-T$(location :kernel_ld)",
+        "-Clink-arg=$(location :entry)",
+        "-Clink-arg=$(location :bootfs_duke_obj)",
+        "-Clink-arg=$(location //third_party/lwext4:lwext4_obj)",
+        "-Clink-arg=-nostdlib",
+        "-Clink-arg=-no-pie",
+    ],
+    deps = [
+        ":kernel_pxe_netlog",
+        "//arch-metal",
+    ],
+)
+
 # Keep the `//kernel:kernel_elf` label and the `kernel.elf` filename stable
 # (run.sh reads bazel-bin/kernel/kernel.elf; //:image + the md5 genrule consume
 # the label).
@@ -303,6 +328,14 @@ genrule(
     name = "kernel_elf_pxe_netlog",
     srcs = [":kernel_elf_pxe_netlog_bin"],
     outs = ["kernel_pxe_netlog.elf"],
+    cmd = "cp $< $@",
+    visibility = ["//visibility:public"],
+)
+
+genrule(
+    name = "kernel_elf_pxe_netlog_duke",
+    srcs = [":kernel_elf_pxe_netlog_duke_bin"],
+    outs = ["kernel_pxe_netlog_duke.elf"],
     cmd = "cp $< $@",
     visibility = ["//visibility:public"],
 )
@@ -435,6 +468,18 @@ genrule(
     name = "bootfs_obj",
     srcs = ["//:bootfs_tar"],
     outs = ["bootfs.o"],
+    cmd = "T=$$(mktemp -d) && cp $< $$T/bootfs.tar && O=$$(pwd)/$@ && " +
+          "(cd $$T && objcopy -I binary -O elf32-i386 -B i386 " +
+          "--rename-section .data=.rodata,alloc,load,readonly,data,contents " +
+          "bootfs.tar $$O) && rm -r $$T",
+)
+
+# Duke field-test variant. The temporary input must still be named bootfs.tar
+# because kernel::bootfs() consumes objcopy's _binary_bootfs_tar_* symbols.
+genrule(
+    name = "bootfs_duke_obj",
+    srcs = ["//:bootfs_duke_tar"],
+    outs = ["bootfs_duke.o"],
     cmd = "T=$$(mktemp -d) && cp $< $$T/bootfs.tar && O=$$(pwd)/$@ && " +
           "(cd $$T && objcopy -I binary -O elf32-i386 -B i386 " +
           "--rename-section .data=.rodata,alloc,load,readonly,data,contents " +

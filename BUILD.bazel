@@ -151,6 +151,23 @@ pkg_tar(
     visibility = ["//kernel:__pkg__"],
 )
 
+# PXE/RLOG field-test bootfs with the Duke Nukem 3D shareware distribution.
+# Keep this separate from the normal embedded bootfs: the GRP makes the
+# resulting kernel roughly 12 MiB larger and is only useful for game tests.
+_DUKE3D_PREFIX = "apps/games/DUKE3D/"
+_DUKE3D_FILES = glob([_DUKE3D_PREFIX + "**/*"])
+_BOOTFS_DUKE_FILES = dict(_BOOTFS_FILES)
+_BOOTFS_DUKE_FILES.update({
+    ":" + s: "GAMES/DUKE3D/" + s[len(_DUKE3D_PREFIX):].upper()
+    for s in _DUKE3D_FILES
+})
+
+pkg_tar(
+    name = "bootfs_duke_tar",
+    files = _BOOTFS_DUKE_FILES,
+    visibility = ["//kernel:__pkg__"],
+)
+
 # Boot bundle (small TAR, partition 1): the LEGACY BOOTLOADER's kernel
 # source only — the MBR stage reads kernel.elf (+ md5) from it. The kernel
 # itself never mounts it: /boot is always the embedded bootfs, on top of
