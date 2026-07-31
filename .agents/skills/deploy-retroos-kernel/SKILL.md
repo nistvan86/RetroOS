@@ -30,7 +30,15 @@ Use the bundled script instead of issuing deployment commands manually.
    "$SKILL_DIR/scripts/deploy_kernel.sh" bazel-bin/kernel/kernel.elf
    ```
 
-5. Report the local and remote checksums. Do not claim the target ran the
+5. Keep the bundled native VGA/BIOS GRUB configuration as the default whenever
+   the current test does not need to launch a specific program. When testing a
+   text diagnostic embedded in `kernel.elf` (for example
+   `boot/TESTS/VBELFB.EXE`), replace only the live tmpfs GRUB configuration
+   with a single timeout-zero entry whose Multiboot line appends
+   `retroos.exec=<embedded-vfs-path>`. Treat this as per-execution test state:
+   do not change the persistent seed, and let the next ordinary deployment
+   restore the default configuration.
+6. Report the local and remote checksums. Do not claim the target ran the
    kernel merely because deployment succeeded.
 
 The script requires the configured TFTP root to be tmpfs and refuses deployment

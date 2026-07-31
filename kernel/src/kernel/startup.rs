@@ -458,8 +458,9 @@ fn init_console_pipe() {
     crate::kernel::thread::set_console_pipe(console_pipe);
 }
 
-/// Run what the boot asked for: the headless `-fw_cfg opt/cmdline` program
-/// sequence (shut down after), or the interactive DN loop.
+/// Run what the boot asked for: a headless program sequence or the interactive
+/// DN loop. A physical PXE/RLOG diagnostic stays alive after completion so its
+/// RCTL receiver can still reboot the machine.
 fn run<A: crate::Arch>(
     machine: &mut A,
     boot: &crate::BootConfig,
@@ -499,8 +500,23 @@ fn run<A: crate::Arch>(
                 screen,
             );
         }
-        crate::screenln!(screen, "All commands done — shutting down.");
         crate::kernel::drivers::hda::emergency_quiesce(); // codec must not ride into poweroff unparked
+
+        #[cfg(pxe_netlog)]
+        if !boot.is_qemu {
+            crate::screenln!(screen, "All commands done — idle; RCTL reboot remains active.");
+            let mut last_poll_tick = u64::MAX;
+            loop {
+                let now_tick = machine.get_ticks();
+                if now_tick != last_poll_tick {
+                    last_poll_tick = now_tick;
+                    crate::arch::arch_pxe_netlog_poll();
+                }
+                core::hint::spin_loop();
+            }
+        }
+
+        crate::screenln!(screen, "All commands done — shutting down.");
         machine.shutdown();
     }
 

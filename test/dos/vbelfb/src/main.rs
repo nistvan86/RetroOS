@@ -13,7 +13,6 @@ const MODE: u16 = 0x111; // 640x480x16
 const PAL_MODE: u16 = 0x101; // 640x480x8
 const INFO_BYTES: u16 = 512;
 const REPORT: &[u8] = b"C:\\VBELFB.TXT\0";
-const PROBE_MODES: &[u16] = &[0x100, 0x101, 0x103, 0x105, 0x110, 0x111, 0x112];
 
 fn emit(handle: u16, s: &[u8]) {
     for &b in s { putc(b); }
@@ -61,6 +60,53 @@ fn rd32(p: *const u8, off: usize) -> u32 {
     unsafe { core::ptr::read_unaligned(p.add(off) as *const u32) }
 }
 
+fn flat_ptr(linear: u32) -> *const u8 {
+    linear.wrapping_sub(dpmi::seg_base(dpmi::ds_sel())) as *const u8
+}
+
+fn collect_mode_list(far_ptr: u32, out: &mut [u16]) -> usize {
+    let linear = ((far_ptr >> 16) << 4).wrapping_add(far_ptr & 0xFFFF);
+    if linear >= 0x10_0000 { return 0; }
+    let p = flat_ptr(linear);
+    let mut n = 0;
+    while n < out.len() {
+        let mode = rd16(p, n * 2);
+        if mode == 0xFFFF { break; }
+        out[n] = mode;
+        n += 1;
+    }
+    n
+}
+
+fn append_text(line: &mut [u8], n: &mut usize, s: &[u8]) {
+    line[*n..*n + s.len()].copy_from_slice(s);
+    *n += s.len();
+}
+
+fn append_hex(line: &mut [u8], n: &mut usize, value: u32, digits: usize) {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    for shift in (0..digits).rev() {
+        line[*n] = HEX[((value >> (shift * 4)) & 0xF) as usize];
+        *n += 1;
+    }
+}
+
+fn emit_mode_summary(handle: u16, mode: u16, r: &dpmi::Rmcs, info: *const u8) {
+    let mut line = [0u8; 128];
+    let mut n = 0usize;
+    append_text(&mut line, &mut n, b"mode="); append_hex(&mut line, &mut n, mode as u32, 4);
+    append_text(&mut line, &mut n, b" ax="); append_hex(&mut line, &mut n, r.eax as u16 as u32, 4);
+    append_text(&mut line, &mut n, b" attr="); append_hex(&mut line, &mut n, rd16(info, 0) as u32, 4);
+    append_text(&mut line, &mut n, b" w="); append_hex(&mut line, &mut n, rd16(info, 0x12) as u32, 4);
+    append_text(&mut line, &mut n, b" h="); append_hex(&mut line, &mut n, rd16(info, 0x14) as u32, 4);
+    append_text(&mut line, &mut n, b" bpp="); append_hex(&mut line, &mut n, unsafe { *info.add(0x19) } as u32, 2);
+    append_text(&mut line, &mut n, b" pitch="); append_hex(&mut line, &mut n, rd16(info, 0x10) as u32, 4);
+    append_text(&mut line, &mut n, b" model="); append_hex(&mut line, &mut n, unsafe { *info.add(0x1B) } as u32, 2);
+    append_text(&mut line, &mut n, b" phys="); append_hex(&mut line, &mut n, rd32(info, 0x28), 8);
+    append_text(&mut line, &mut n, b"\r\n");
+    emit(handle, &line[..n]);
+}
+
 fn vbe_mode_info(seg: u16, mode: u16) -> dpmi::Rmcs {
     let mut r = dpmi::Rmcs::default();
     r.eax = 0x4F01;
@@ -98,6 +144,11 @@ fn dump_mode(handle: u16, info: *const u8, requested: u16, r: &dpmi::Rmcs) {
     emit_bytes(handle, b"raw10=", &raw[16..32]);
     emit_bytes(handle, b"raw20=", &raw[32..48]);
     emit_bytes(handle, b"raw30=", &raw[48..64]);
+    let tail = unsafe { core::slice::from_raw_parts(info.add(0x40), 64) };
+    emit_bytes(handle, b"raw40=", &tail[..16]);
+    emit_bytes(handle, b"raw50=", &tail[16..32]);
+    emit_bytes(handle, b"raw60=", &tail[32..48]);
+    emit_bytes(handle, b"raw70=", &tail[48..64]);
     emit_hex(handle, b"attributes=", rd16(info, 0) as u32);
     emit_hex(handle, b"pitch=", rd16(info, 0x10) as u32);
     emit_hex(handle, b"width=", rd16(info, 0x12) as u32);
@@ -256,11 +307,6 @@ pub fn app_main(argc: usize, argv: &[&[u8]]) {
     emit_hex(handle, b"controller_flags=", controller.flags as u32);
     emit_hex(handle, b"controller_es=", controller.es as u32);
     emit_hex(handle, b"controller_di=", controller.edi);
-    let ctrl_raw = unsafe { core::slice::from_raw_parts(info, 64) };
-    emit_bytes(handle, b"controller_raw00=", &ctrl_raw[..16]);
-    emit_bytes(handle, b"controller_raw10=", &ctrl_raw[16..32]);
-    emit_bytes(handle, b"controller_raw20=", &ctrl_raw[32..48]);
-    emit_bytes(handle, b"controller_raw30=", &ctrl_raw[48..64]);
     emit_hex(handle, b"controller_signature=", rd32(info, 0));
     emit_hex(handle, b"controller_version=", rd16(info, 4) as u32);
     emit_hex(handle, b"controller_oem_ptr=", rd32(info, 6));
@@ -268,14 +314,17 @@ pub fn app_main(argc: usize, argv: &[&[u8]]) {
     emit_hex(handle, b"controller_modes_ptr=", rd32(info, 0x0E));
     emit_hex(handle, b"controller_memory_64k=", rd16(info, 0x12) as u32);
 
-    emit(handle, b"-- VBE mode-info sweep (AX=4F01h) --\r\n");
-    for &probe_mode in PROBE_MODES {
+    let mut modes = [0u16; 128];
+    let mode_count = collect_mode_list(rd32(info, 0x0E), &mut modes);
+    emit(handle, b"-- Complete advertised VBE mode list --\r\n");
+    emit_hex(handle, b"mode_count=", mode_count as u32);
+    for &probe_mode in &modes[..mode_count] {
         unsafe { core::ptr::write_bytes(info, 0xCC, INFO_BYTES as usize); }
         let query = vbe_mode_info(seg, probe_mode);
-        dump_mode(handle, info, probe_mode, &query);
+        emit_mode_summary(handle, probe_mode, &query, info);
     }
 
-    emit(handle, b"-- Selected mode and DPMI map --\r\n");
+    emit(handle, b"-- Focused mode 111h query and DPMI map --\r\n");
     unsafe { core::ptr::write_bytes(info, 0xCC, INFO_BYTES as usize); }
     let selected = vbe_mode_info(seg, mode);
     dump_mode(handle, info, mode, &selected);

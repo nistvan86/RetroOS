@@ -498,4 +498,3 @@ align 8
 zrh_ret_ptr:
     dd zero_rsp_high.back   ; 32-bit offset (m16:32)
     dw 0x08                 ; compat code segment
-

@@ -94,6 +94,7 @@ rust_library(
     }),
     deps = [
         "//arch-abi",
+        "//klog",
         "//lib",
         "//lib:sound",
         "//third_party/lwext4:lwext4",
@@ -133,6 +134,7 @@ rust_library(
     }),
     deps = [
         "//arch-abi",
+        "//klog",
         "//lib",
         "//lib:sound",
         "//third_party/lwext4:lwext4",

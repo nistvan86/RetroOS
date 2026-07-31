@@ -252,6 +252,11 @@ pub struct PcMachine {
     /// Reads of port 0x71 pass through to the host CMOS using this index.
     pub cmos_index: u8,
 
+    /// Non-zero while an explicit DPMI INT 10h VBE call is executing the
+    /// native option ROM. The value is the outer RMCS address, used to close
+    /// the scope only when that matching continuation returns.
+    pub native_vbe_io_rmcs: u32,
+
     /// PM/RM transition state. The pm-side cursor isn't a separate
     /// field — it's `regs.SS:SP` when user is on pm side, or
     /// `locked_stack.other_stack` (an `(SS, SP)` pair) when user is on
@@ -454,6 +459,7 @@ impl PcMachine {
             spk: sound::speaker::Speaker::new(),
             mixer: Mixer::new(),
             cmos_index: 0,
+            native_vbe_io_rmcs: 0,
             locked_stack: super::mode_transitions::LockedStackState::new(),
         }
     }
@@ -483,6 +489,14 @@ const PORT_TRACE: bool = false;
 
 /// Emulate IN from a port using the virtual peripherals.
 pub fn emulate_inb<A: crate::Arch>(machine: &mut A, pc: &mut PcMachine, port: u16) -> u8 {
+    // Native VBE option-ROM code uses PCI configuration mechanism #1 and the
+    // chipset's wide-decoded indexed VGA registers. These ports must not be
+    // folded into the ISA 10-bit window while the requested BIOS call runs.
+    if (matches!(port, 0xCF8..=0xCFF | 0xF140..=0xF147))
+        && pc.native_vbe_io_rmcs != 0
+    {
+        return machine.inb(port);
+    }
     // ISA decodes only A0-A9, so I/O ports alias mod 0x400 (e.g. a
     // gameport at 0x208 also answers 0x608). DOS-era code relies on
     // this; the whole DOS I/O surface is <= 0x3FF. Fold the alias
@@ -616,6 +630,12 @@ pub fn emulate_inb<A: crate::Arch>(machine: &mut A, pc: &mut PcMachine, port: u1
 
 /// Emulate OUT to a port.
 pub fn emulate_outb<A: crate::Arch>(machine: &mut A, pc: &mut PcMachine, regs: &mut Regs, port: u16, val: u8) {
+    if (matches!(port, 0xCF8..=0xCFF | 0xF140..=0xF147))
+        && pc.native_vbe_io_rmcs != 0
+    {
+        machine.outb(port, val);
+        return;
+    }
     // ISA 10-bit I/O decode — fold the alias mod 0x400. See `emulate_inb`.
     let port = port & 0x3FF;
     match port {
@@ -779,6 +799,17 @@ fn input_status1<A: crate::Arch>(machine: &mut A, beam: &crate::kernel::display:
 /// Complete an `IN AL/AX/EAX, port` the arch monitor bubbled up. Reads `size`
 /// bytes through `emulate_inb` and writes the result into `regs.rax`.
 pub fn handle_in_event<A: crate::Arch>(machine: &mut A, pc: &mut PcMachine, regs: &mut Regs, port: u16, size: u32) {
+    if pc.native_vbe_io_rmcs != 0
+        && matches!(port, 0xCF8 | 0xCFC | 0xF140 | 0xF144)
+    {
+        let (val, mask) = match size {
+            2 => (machine.inw(port) as u64, 0xFFFF),
+            4 => (machine.inl(port) as u64, 0xFFFF_FFFF),
+            _ => (machine.inb(port) as u64, 0xFF),
+        };
+        regs.rax = (regs.rax & !mask) | val;
+        return;
+    }
     if size == 2 && matches!(port, 0x01CE..=0x01D0) {
         let val = machine.inw(port) as u64;
         regs.rax = (regs.rax & !0xFFFF) | val;
@@ -796,6 +827,16 @@ pub fn handle_in_event<A: crate::Arch>(machine: &mut A, pc: &mut PcMachine, regs
 /// Complete an `OUT port, AL/AX/EAX` the arch monitor bubbled up.
 pub fn handle_out_event<A: crate::Arch>(machine: &mut A, pc: &mut PcMachine, regs: &mut Regs, port: u16, size: u32) {
     let val = regs.rax;
+    if pc.native_vbe_io_rmcs != 0
+        && matches!(port, 0xCF8 | 0xCFC | 0xF140 | 0xF144)
+    {
+        match size {
+            2 => machine.outw(port, val as u16),
+            4 => machine.outl(port, val as u32),
+            _ => machine.outb(port, val as u8),
+        }
+        return;
+    }
     if size == 2 && matches!(port, 0x01CE..=0x01D0) {
         machine.outw(port, val as u16);
         return;

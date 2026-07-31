@@ -65,10 +65,9 @@ fn flush_pxe_log() {
 
 #[cfg(pxe_netlog)]
 fn log_byte_pxe(b: u8) {
-    // Preserve both pre-existing destinations. VGA rendering happens before
-    // the sink is called by Screen/putchar and is therefore unaffected.
+    // Preserve debugcon. The common lib::vga stream has already retained this
+    // byte in klog before invoking the sink, so do not append it twice here.
     x86::outb(0xE9, b);
-    crate::kernel::klog::push_byte(b);
     if !NETLOG_ENABLED.load(Ordering::Relaxed) || b == b'\r' { return; }
 
     let flush = unsafe {
@@ -114,8 +113,10 @@ const PHYS_TO_SEG: usize = paging2::KERNEL_BASE - KERNEL_PHYS;
 unsafe fn capture_boot_info(
     info: *const arch::MultibootInfo,
     mmap_out: &mut [MultibootMmapEntry; 128],
-    cmdline_out: &mut [u8],
-) -> (arch::MultibootInfo, usize, usize) {
+    cmdline_out: &mut [u8; 4096],
+    vbe_control_out: &mut [u8; 512],
+    vbe_mode_out: &mut [u8; 256],
+) -> (arch::MultibootInfo, usize, usize, bool) {
     let src = (info as usize).wrapping_add(PHYS_TO_SEG) as *const arch::MultibootInfo;
     let inf = unsafe { core::ptr::read_unaligned(src) };
     let mut count = 0;
@@ -138,7 +139,52 @@ unsafe fn capture_boot_info(
             cmdline_len += 1;
         }
     }
-    (inf, count, cmdline_len)
+    let vbe_valid = inf.flags & (1 << 11) != 0
+        && inf.vbe_control_info != 0
+        && inf.vbe_mode_info != 0;
+    if vbe_valid {
+        let control = (inf.vbe_control_info as usize).wrapping_add(PHYS_TO_SEG) as *const u8;
+        let mode = (inf.vbe_mode_info as usize).wrapping_add(PHYS_TO_SEG) as *const u8;
+        for (i, byte) in vbe_control_out.iter_mut().enumerate() {
+            *byte = unsafe { control.add(i).read_volatile() };
+        }
+        for (i, byte) in vbe_mode_out.iter_mut().enumerate() {
+            *byte = unsafe { mode.add(i).read_volatile() };
+        }
+    }
+    (inf, count, cmdline_len, vbe_valid)
+}
+
+fn has_multiboot_arg(cmdline: &[u8], wanted: &[u8]) -> bool {
+    cmdline.split(|b| b.is_ascii_whitespace()).any(|arg| arg == wanted)
+}
+
+fn dump_grub_vbe_snapshot(
+    screen: &mut lib::vga::Screen,
+    info: &arch::MultibootInfo,
+    control: &[u8; 512],
+    mode: &[u8; 256],
+) {
+    let u16_at = |b: &[u8], off: usize| u16::from_le_bytes([b[off], b[off + 1]]);
+    let u32_at = |b: &[u8], off: usize| {
+        u32::from_le_bytes([b[off], b[off + 1], b[off + 2], b[off + 3]])
+    };
+    lib::screenln!(screen, "GRUB VBE SNAPSHOT mode={:04X}", info.vbe_mode);
+    lib::screenln!(screen,
+        "  ctrl sig={:08X} ver={:04X} modes={:08X} mem64k={:04X}",
+        u32_at(control, 0), u16_at(control, 4), u32_at(control, 0x0E),
+        u16_at(control, 0x12));
+    for (base, chunk) in control[..64].chunks(16).enumerate() {
+        lib::screenln!(screen, "  C{:02X}={:02X?}", base * 16, chunk);
+    }
+    lib::screenln!(screen,
+        "  mode attr={:04X} pitch={} size={}x{} planes={} bpp={} model={} phys={:08X}",
+        u16_at(mode, 0), u16_at(mode, 0x10), u16_at(mode, 0x12),
+        u16_at(mode, 0x14), mode[0x18], mode[0x19], mode[0x1B],
+        u32_at(mode, 0x28));
+    for (base, chunk) in mode[..128].chunks(16).enumerate() {
+        lib::screenln!(screen, "  M{:02X}={:02X?}", base * 16, chunk);
+    }
 }
 
 /// boot_kernel - Entry point called by asm boot stub
@@ -158,10 +204,16 @@ pub unsafe extern "C" fn boot_kernel(magic: u32, info: *const arch::MultibootInf
     // entered the kernel" from "kernel died during init". Pre-paging we run
     // on offset segments (base = KERNEL_PHYS - KERNEL_BASE), so a physical
     // address P is reached at P + (KERNEL_BASE - KERNEL_PHYS), wrapping.
+    let mut multiboot_cmdline = [0u8; 4096];
+    let mut grub_vbe_control = [0u8; 512];
+    let mut grub_vbe_mode = [0u8; 256];
     let mut mmap_buf = [MultibootMmapEntry { size: 0, base: 0, length: 0, typ: 0 }; 128];
-    let mut boot_cmdline = [0u8; 512];
-    let (boot_info, mmap_count, boot_cmdline_len) =
-        unsafe { capture_boot_info(info, &mut mmap_buf, &mut boot_cmdline) };
+    let (boot_info, mmap_count, multiboot_cmdline_len, grub_vbe_valid) = unsafe {
+        capture_boot_info(
+            info, &mut mmap_buf, &mut multiboot_cmdline,
+            &mut grub_vbe_control, &mut grub_vbe_mode,
+        )
+    };
     let info = &boot_info;
 
     let kernel_size =
@@ -288,6 +340,19 @@ pub unsafe extern "C" fn boot_kernel(magic: u32, info: *const arch::MultibootInf
 
     lib::screenln!(screen, "Interrupts initialized");
 
+    if has_multiboot_arg(
+        &multiboot_cmdline[..multiboot_cmdline_len],
+        b"retroos.vbeprobe",
+    ) {
+        if grub_vbe_valid {
+            dump_grub_vbe_snapshot(&mut screen, info, &grub_vbe_control, &grub_vbe_mode);
+        } else {
+            lib::screenln!(screen,
+                "GRUB VBE SNAPSHOT unavailable flags={:08X} ctrl={:08X} mode={:08X}",
+                info.flags, info.vbe_control_info, info.vbe_mode_info);
+        }
+    }
+
     // The compat-mode switch was a test harness to force the experimental
     // x64/long-mode path — the kernel normally runs PAE 32-bit. On a real CPU
     // (KVM/metal) it switches to long mode and the first IRQ through the 64-bit
@@ -319,9 +384,9 @@ pub unsafe extern "C" fn boot_kernel(magic: u32, info: *const arch::MultibootInf
     lib::screenln!(screen, "\x1b[92mHello from Rust kernel!\x1b[0m");
 
     // Read platform boot configuration at the boundary, before handing it to
-    // the kernel. The Multiboot command line carries physical-machine policy;
-    // QEMU-only launch settings additionally come from fw_cfg.
-    let config = read_boot_config(&boot_cmdline[..boot_cmdline_len]);
+    // the kernel. Multiboot carries physical-machine policy and an optional
+    // targeted executable; QEMU-only settings additionally come from fw_cfg.
+    let config = read_boot_config(&multiboot_cmdline[..multiboot_cmdline_len]);
 
     // Diagnostic: with IF still 0, dump the timer chain to the VGA console so a
     // freeze-at-first-IRQ on real hardware is readable instead of a black hang.
@@ -349,10 +414,10 @@ pub unsafe extern "C" fn boot_kernel(magic: u32, info: *const arch::MultibootInf
     crate::kernel::startup::startup(&mut machine, &config, screen);
 }
 
-/// Read platform boot settings into a `BootConfig`. The Multiboot command line
-/// is available on real hardware; QEMU additionally supplies its headless
-/// cmdline/cwd/debug settings through fw_cfg. Port I/O remains here in the
-/// metal boot glue, so the kernel never touches firmware ports.
+/// Read platform boot arguments into a `BootConfig`. GRUB can select a built-in
+/// program with `retroos.exec=PATH`; QEMU fw_cfg supplies the richer command,
+/// cwd and debug configuration and overrides the selected program when set.
+/// Port I/O and Multiboot parsing stay in this metal glue.
 fn read_boot_config(multiboot_cmdline: &[u8]) -> crate::BootConfig {
     const SEL: u16 = 0x510;
     const DATA: u16 = 0x511;
@@ -386,12 +451,19 @@ fn read_boot_config(multiboot_cmdline: &[u8]) -> crate::BootConfig {
         .split(|b| b.is_ascii_whitespace())
         .any(|arg| arg.eq_ignore_ascii_case(b"disk-writes=persistent"));
 
+    for arg in multiboot_cmdline.split(|b| b.is_ascii_whitespace()) {
+        if let Some(exec) = arg.strip_prefix(b"retroos.exec=")
+            && !exec.is_empty()
+        {
+            cfg.set_cmdline(exec);
+        }
+    }
     select(0x0000); // FW_CFG_SIGNATURE
     let mut sig = [0u8; 4];
     read_bytes(&mut sig);
     cfg.is_qemu = &sig == b"QEMU";
     if !cfg.is_qemu {
-        return cfg; // no fw_cfg interface — retain Multiboot policy only
+        return cfg; // no fw_cfg interface — retain Multiboot policy/selection
     }
     let mut buf = [0u8; 4096];
     if let Some(n) = read_named(b"opt/cmdline", &mut buf) { cfg.set_cmdline(&buf[..n]); }
