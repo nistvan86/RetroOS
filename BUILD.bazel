@@ -165,6 +165,11 @@ _BOOTFS_DUKE_FILES.update({
 pkg_tar(
     name = "bootfs_duke_tar",
     files = _BOOTFS_DUKE_FILES,
+    # The General MIDI synthesizer burns these patches into a one-time ROM at
+    # boot. Keep them off the ordinary rescue bootfs, but include them with
+    # the Duke field-test image where MIDI is part of the game experience.
+    # This TAR is mounted at C:\\BOOT, which midi_bank also searches.
+    deps = [":ultrasnd_tar"],
     visibility = ["//kernel:__pkg__"],
 )
 

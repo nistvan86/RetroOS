@@ -43,12 +43,21 @@ fn resolve_child(base: &[u8], want: &[u8], want_dir: bool) -> Option<alloc::vec:
     None
 }
 
-/// Burn the ROM from `<c_root>/ULTRASND/MIDI`, every path component matched
+/// Burn the ROM from `<c_root>/ULTRASND/MIDI`, or the embedded bootfs fallback
+/// `<c_root>/BOOT/ULTRASND/MIDI`. Every path component is matched
 /// case-insensitively against the real disk (DOS wrote uppercase, Linux
 /// installers write lowercase; guessing either way empties the bank).
 pub fn load_from_c_root(c_root: &[u8]) {
-    let Some(ultrasnd) = resolve_child(c_root, b"ULTRASND", true) else {
-        crate::println!("midi: no ULTRASND under the C: root — General MIDI silent");
+    let mut boot_root = alloc::vec::Vec::with_capacity(c_root.len() + 5);
+    boot_root.extend_from_slice(c_root);
+    if !boot_root.ends_with(b"/") {
+        boot_root.push(b'/');
+    }
+    boot_root.extend_from_slice(b"boot");
+    let ultrasnd = resolve_child(c_root, b"ULTRASND", true)
+        .or_else(|| resolve_child(&boot_root, b"ULTRASND", true));
+    let Some(ultrasnd) = ultrasnd else {
+        crate::println!("midi: no ULTRASND under C: or C:\\BOOT — General MIDI silent");
         return;
     };
     let Some(midi) = resolve_child(&ultrasnd, b"MIDI", true) else {

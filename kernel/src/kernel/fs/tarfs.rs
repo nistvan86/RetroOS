@@ -228,6 +228,21 @@ impl Filesystem for TarFs {
     /// tar directory is small enough that the first batch normally finishes
     /// it; the cookie is a logical entry index into that fixed sequence.
     fn readdir(&self, dir: &[u8], cookie: u64, out: &mut Vec<DirEntry>, max: usize) -> Option<u64> {
+        // TAR names spell directories with a trailing `/`.  Accept the same
+        // canonical directory spelling as the other VFS backends (`foo` as
+        // well as `foo/`), particularly when a caller crosses a mount point
+        // and VFS hands us the relative `foo` path.
+        let mut normalized = [0u8; 101]; // TAR name field is at most 100 bytes.
+        let dir = if dir.is_empty() || dir.last() == Some(&b'/') {
+            dir
+        } else {
+            if dir.len() >= normalized.len() {
+                return None; // cannot name an entry in this TAR anyway
+            }
+            normalized[..dir.len()].copy_from_slice(dir);
+            normalized[dir.len()] = b'/';
+            &normalized[..dir.len() + 1]
+        };
         let mut seen = 0u64; // entries passed over to reach the cookie
         let start = cookie;
 
