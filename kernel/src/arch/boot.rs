@@ -43,25 +43,15 @@ static mut NETLOG_BUF: [u8; 512] = [0; 512];
 static mut NETLOG_LEN: usize = 0;
 
 #[cfg(pxe_netlog)]
-fn log_byte_pxe(b: u8) {
-    // Preserve both pre-existing destinations. VGA rendering happens before
-    // the sink is called by Screen/putchar and is therefore unaffected.
-    x86::outb(0xE9, b);
-    crate::kernel::klog::push_byte(b);
-    if !NETLOG_ENABLED.load(Ordering::Relaxed) || b == b'\r' { return; }
-
+fn flush_pxe_log() {
     unsafe {
-        if NETLOG_LEN < 512 {
-            NETLOG_BUF[NETLOG_LEN] = b;
-            NETLOG_LEN += 1;
-        }
-        // Send the first complete line immediately as a health marker, then
-        // batch later lines to make the finite never-reused pool useful.
-        let flush = NETLOG_LEN == 512
-            || (b == b'\n' && (!NETLOG_SENT.load(Ordering::Relaxed) || NETLOG_LEN >= 256));
-        if !flush || !at_ring1() || NETLOG_BUSY.swap(true, Ordering::Acquire) { return; }
+        if NETLOG_LEN == 0 || NETLOG_BUSY.swap(true, Ordering::Acquire) { return; }
         let data = core::slice::from_raw_parts(core::ptr::addr_of!(NETLOG_BUF) as *const u8, NETLOG_LEN);
-        let status = arch::arch_pxe_netlog_send(data);
+        let status = if at_ring1() {
+            arch::arch_pxe_netlog_send(data)
+        } else {
+            arch::pxe_netlog_send_ring0(data)
+        };
         NETLOG_LEN = 0;
         if status == 0 { NETLOG_SENT.store(true, Ordering::Relaxed); }
         NETLOG_BUSY.store(false, Ordering::Release);
@@ -71,6 +61,27 @@ fn log_byte_pxe(b: u8) {
             NETLOG_ENABLED.store(false, Ordering::Relaxed);
         }
     }
+}
+
+#[cfg(pxe_netlog)]
+fn log_byte_pxe(b: u8) {
+    // Preserve both pre-existing destinations. VGA rendering happens before
+    // the sink is called by Screen/putchar and is therefore unaffected.
+    x86::outb(0xE9, b);
+    crate::kernel::klog::push_byte(b);
+    if !NETLOG_ENABLED.load(Ordering::Relaxed) || b == b'\r' { return; }
+
+    let flush = unsafe {
+        if NETLOG_LEN < 512 {
+            NETLOG_BUF[NETLOG_LEN] = b;
+            NETLOG_LEN += 1;
+        }
+        // Send the first complete line immediately as a health marker, then
+        // batch later lines to make the finite never-reused pool useful.
+        NETLOG_LEN == 512
+            || (b == b'\n' && (!NETLOG_SENT.load(Ordering::Relaxed) || NETLOG_LEN >= 256))
+    };
+    if flush { flush_pxe_log(); }
 }
 
 #[cfg(pxe_netlog)]
@@ -215,6 +226,7 @@ pub unsafe extern "C" fn boot_kernel(magic: u32, info: *const arch::MultibootInf
     // exists only where this value is; ambient println! is log-only.
     let mut screen = lib::vga::Screen::new();
 
+    let mut machine = arch::Metal;
     lib::screenln!(screen, "\x1b[96mRetroOS Rust Kernel\x1b[0m");
 
     paging2::finish_setup_paging();
@@ -259,6 +271,21 @@ pub unsafe extern "C" fn boot_kernel(magic: u32, info: *const arch::MultibootInf
     crate::fbcon::init(info, &mut screen);
 
     irq::init_interrupts();
+
+    // PXE's protected-mode bridge requires CPL0, finalized page tables, and a
+    // live interrupt-controller setup: the retained Intel UNDI may briefly
+    // expose interrupts inside a firmware call. This is its earliest safe
+    // point in the existing boot dependency order. Direct ring-0 transmission
+    // carries logs until enter_ring1(), after which the sink uses int 0x80.
+    #[cfg(pxe_netlog)]
+    if let Some(mac) = crate::kernel::pxe::netlog_init(&machine, &mut screen) {
+        NETLOG_ENABLED.store(true, Ordering::Relaxed);
+        crate::vga::set_debug_sink(log_byte_pxe);
+        lib::screenln!(screen,
+            "PXE netlog ready: {:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
+            mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+    }
+
     lib::screenln!(screen, "Interrupts initialized");
 
     // The compat-mode switch was a test harness to force the experimental
@@ -302,7 +329,6 @@ pub unsafe extern "C" fn boot_kernel(magic: u32, info: *const arch::MultibootInf
 
     // PXE's protected-mode selectors require CPL0. The diagnostic target calls
     // the firmware before the ordinary kernel drops to ring 1.
-    let mut machine = arch::Metal;
     #[cfg(pxe_probe_only)]
     {
         screen.clear();
@@ -311,16 +337,7 @@ pub unsafe extern "C" fn boot_kernel(magic: u32, info: *const arch::MultibootInf
         arch::halt_forever();
     }
 
-    #[cfg(pxe_netlog)]
-    let pxe_netlog_ready = crate::kernel::pxe::netlog_init(&machine, &mut screen);
-
     descriptors::enter_ring1();
-
-    #[cfg(pxe_netlog)]
-    if pxe_netlog_ready {
-        NETLOG_ENABLED.store(true, Ordering::Relaxed);
-        crate::vga::set_debug_sink(log_byte_pxe);
-    }
 
     lib::screenln!(screen, "Ring1 entered, paging + interrupts + syscall setup complete");
 
@@ -421,6 +438,13 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
     lib::screenln!(screen);
 
     crate::kernel::stacktrace::stack_trace(&mut screen);
+
+    // Normal logging batches short lines. A panic has no future output to
+    // trigger the next threshold, so make one final best-effort PXE send.
+    // If the panic interrupted a firmware call, NETLOG_BUSY prevents unsafe
+    // recursive entry and VGA/klog remain available.
+    #[cfg(pxe_netlog)]
+    flush_pxe_log();
 
     arch::halt_forever();
 }

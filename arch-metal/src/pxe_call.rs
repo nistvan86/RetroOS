@@ -214,6 +214,12 @@ pub(crate) fn pxe_netlog_send(payload: *const u8, len: usize) -> u32 {
     0
 }
 
+/// Ring-0 entry used during early boot, before the kernel can issue the
+/// ring-1 `int 0x80` arch call. The firmware bridge itself requires CPL0.
+pub fn pxe_netlog_send_ring0(payload: &[u8]) -> u32 {
+    pxe_netlog_send(payload.as_ptr(), payload.len())
+}
+
 #[repr(align(64))]
 struct IsrParams([u8; 32]);
 

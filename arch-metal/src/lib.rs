@@ -114,7 +114,10 @@ pub use descriptors::{USER_CS, USER_CS64, USER_DS};
 pub use traps::arch_call;
 pub use calls::*;
 #[cfg(pxe_call_probe)]
-pub use pxe_call::{pxe_netlog_configure, pxe_pm_call, pxe_pm_call_with_param_segment};
+pub use pxe_call::{
+    pxe_netlog_configure, pxe_netlog_send_ring0, pxe_pm_call,
+    pxe_pm_call_with_param_segment,
+};
 
 // Power/halt entry points. The kernel layer must not toggle IF directly —
 // `cli`/`sti` stay arch-private; use `halt_forever` (panic) and

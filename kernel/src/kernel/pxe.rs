@@ -358,13 +358,13 @@ fn yesno(v: bool) -> &'static str { if v { "Y" } else { "N" } }
 /// Bring up the retained PXE UNDI interface for the non-halting netlog build.
 /// This must run at ring 0 before the ordinary boot path enters ring 1.
 #[cfg(pxe_netlog)]
-pub fn netlog_init<A: Arch>(machine: &A, screen: &mut crate::vga::Screen) -> bool {
+pub fn netlog_init<A: Arch>(machine: &A, screen: &mut crate::vga::Screen) -> Option<[u8; 6]> {
     let probe = Probe::scan(machine);
     let pxe_phys = match probe.pxe {
         Some((addr, true, true)) => addr,
         _ => {
             crate::screenln!(screen, "PXE netlog: no usable !PXE");
-            return false;
+            return None;
         }
     };
     let mut params = InfoParams([0u8; 192]);
@@ -374,7 +374,7 @@ pub fn netlog_init<A: Arch>(machine: &A, screen: &mut crate::vga::Screen) -> boo
         let status = u16::from_le_bytes([params.0[0], params.0[1]]);
         if !matches!(result, Ok(0)) || status != 0 {
             crate::screenln!(screen, "PXE netlog: {} failed S={:04X}", name, status);
-            return false;
+            return None;
         }
     }
     params.0.fill(0);
@@ -383,7 +383,7 @@ pub fn netlog_init<A: Arch>(machine: &A, screen: &mut crate::vga::Screen) -> boo
     let addr_len = u16::from_le_bytes([params.0[10], params.0[11]]);
     if !matches!(info, Ok(0)) || status != 0 || addr_len < 6 {
         crate::screenln!(screen, "PXE netlog: get-info failed S={:04X}", status);
-        return false;
+        return None;
     }
     let mut mac = [0u8; 6];
     mac.copy_from_slice(&params.0[12..18]);
@@ -394,14 +394,11 @@ pub fn netlog_init<A: Arch>(machine: &A, screen: &mut crate::vga::Screen) -> boo
     let status = u16::from_le_bytes([params.0[0], params.0[1]]);
     if !matches!(open, Ok(0)) || status != 0 {
         crate::screenln!(screen, "PXE netlog: open failed S={:04X}", status);
-        return false;
+        return None;
     }
 
     let pxe = (LOW_MEM_BASE + pxe_phys) as *const u8;
     let session = machine.rdtsc() as u32;
     unsafe { crate::arch::pxe_netlog_configure(pxe, mac, session); }
-    crate::screenln!(screen,
-        "PXE netlog ready: {:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
-        mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
-    true
+    Some(mac)
 }

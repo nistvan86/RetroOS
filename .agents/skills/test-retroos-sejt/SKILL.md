@@ -44,7 +44,8 @@ Use `deploy-retroos-kernel` for atomic publication and
 
 ## Interpretation
 
-- RLOG begins after UNDI setup and ring-1 entry; VGA remains simultaneous.
+- RLOG begins during early ring-0 boot immediately after UNDI setup; VGA
+  remains simultaneous. The expected first line is `PXE netlog ready: ...`.
 - No screen indicates failure before the observable kernel path.
 - VGA without RLOG can indicate PXE initialization or transmit failure.
 - Sequence gaps indicate missing frames; distinct sessions indicate reboots.
