@@ -104,6 +104,37 @@ The lightweight path is the current default for kernel iteration. The larger
 harness below remains the plan when stronger recovery, concurrency, and visual
 evidence are required.
 
+## Deferred SEJT native-VGA OSD investigation
+
+Hardware session `0e7189f0` confirmed that F12 can suspend DN, switch the
+physical VGA card to the fixed 320x200x8 Mode 13h OSD surface, display a
+readable and functional menu, close it, and restore DN. The initial completely
+blank OSD was caused by `prepare_native_osd` omitting the Mode 13h Attribute
+Controller state; setting the identity palette, graphics/256-colour mode, and
+colour-plane enable made the OSD itself work.
+
+The guest preview behind the OSD remains completely corrupted on the
+D945GSEJT: colours are wrong and screen elements repeat. This is not expected
+scaling loss. The menu drawn over the preview is correct, and the guest is
+restored correctly afterward, which isolates the defect to capture or
+reconstruction of the suspended native text framebuffer before it is rendered
+into the OSD background.
+
+Defer this work. When resumed:
+
+1. Instrument the F12 save path with the detected VGA mode, AC palette and
+   control registers, CRTC start/stride state, and checksums/samples of saved
+   planes 0 and 1.
+2. Verify the Intel VGA's odd/even text-memory layout when temporarily read
+   through the flat A0000 aperture; do not assume the resulting per-plane
+   offsets match the emulated canonical layout.
+3. Compare captured character/attribute cells with direct B8000 samples before
+   switching to the OSD mode.
+4. Correct the native-text capture conversion and verify text, planar graphics,
+   Mode X, and Mode 13h backgrounds independently.
+5. If accurate capture cannot be made safe for a mode, use a plain OSD
+   background for that mode rather than displaying corrupted guest content.
+
 ## Codex integration strategy
 
 ### Repository rules

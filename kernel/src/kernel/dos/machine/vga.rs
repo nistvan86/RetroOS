@@ -35,6 +35,19 @@ pub fn prepare_native_osd() {
     state.seq = regs.seq;
     state.gc = regs.gc;
     state.crtc = regs.crtc;
+    // The register table deliberately covers only the files used for mode
+    // classification. A physical Mode 13h scanout also requires the Attribute
+    // Controller's BIOS values: identity palette, graphics + 256-colour mode,
+    // and all colour planes enabled. Leaving VgaState's text defaults here
+    // switches the card's timings/aperture but produces a black display.
+    for i in 0..16 {
+        state.ac[i] = i as u8;
+    }
+    state.ac[0x10] = 0x41;
+    state.ac[0x11] = 0x00;
+    state.ac[0x12] = 0x0F;
+    state.ac[0x13] = 0x00;
+    state.ac[0x14] = 0x00;
     state.dac = lib::vga_render::fallback_palette();
     state.planes.resize(4 * 0x10000, 0);
     state.restore_to_hardware();
