@@ -107,6 +107,7 @@ pub mod arch_call {
     pub const MAP_FRESH_RANGE: u64 = 0x11E;   // EDX=vpage_start, ECX=count — replace range with fresh anon frames
     pub const HALT: u64 = 0x11F;              // cli + hlt forever at ring 0 (never returns)
     pub const PXE_NETLOG_SEND: u64 = 0x120;   // EDX=payload, ECX=len -> EAX=status
+    pub const PXE_NETLOG_POLL: u64 = 0x121;   // poll UNDI; accepted RCTL reboot does not return
 }
 
 static DEBUG_WATCH_COUNT: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
@@ -268,6 +269,12 @@ fn arch_dispatch(regs: &mut Regs) {
                 regs.rdx as usize as *const u8,
                 regs.rcx as usize,
             ) as u64;
+        }
+        arch_call::PXE_NETLOG_POLL => {
+            if crate::pxe_call::pxe_netlog_poll_reboot() {
+                crate::x86::reboot();
+            }
+            regs.rax = 0;
         }
         arch_call::REARM_IRQ => {
             crate::irq::rearm_irq(regs.rdx as u8);

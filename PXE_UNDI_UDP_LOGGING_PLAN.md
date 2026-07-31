@@ -272,13 +272,15 @@ Each hardware fault removed one ambiguity:
     protected-mode Intel UNDI call, NIC transmission, physical Ethernet link,
     and Pi raw-socket reception. No ARP, IPv4, UDP, DHCP, or native NIC driver
     was involved.
-14. The first non-halting logger attempted to recycle each buffer only after
-    polling `PXENV_UNDI_ISR`. Intel build 082 returned from that ISR call to
-    the correct temporary trampoline selector but invalid offset `FFFF`,
-    producing `#GP`; repairing only the offset left inconsistent call state
-    and caused a reboot/triple-fault loop. That repair was removed.
-15. The revised logger does not call `UNDI_ISR` and never reuses an accepted
-    transmit buffer. Its first pool layout accidentally consumed 1 MiB because
+14. Exact analysis of Intel PXE build 082 showed that its `UNDI_ISR` handler
+    returns normally with a 16-bit `retf`. The faulting kernel happened to link
+    our firmware `lcall` at trampoline offset `FFFA`, making its legitimate
+    return address `FFFF`; the following instruction crossed the temporary
+    64-KiB code-segment limit and raised `#GP`. The permanent fix bases the
+    temporary descriptor at the helper itself and enters at offset zero.
+    Hardware then returned `ISR1 F=0000` (ours) followed by `ISR2 F=0002`
+    (transmit complete), with AX and status zero throughout.
+15. The logger's first pool layout accidentally consumed 1 MiB because
     every 1 KiB element had 4 KiB alignment; the enlarged early ELF memory
     segment caused a pre-console reboot and was rolled back. The corrected
     layout is one 64-KiB-aligned allocation containing 64 tightly packed 1-KiB
@@ -286,29 +288,34 @@ Each hardware fault removed one ambiguity:
     512 bytes per frame, providing roughly 32 KiB of remote payload. Pool
     exhaustion or any transmit failure disables only remote logging; VGA, port
     `E9`, RAM klog, and normal boot continue.
+16. Every PXE call now saves and restores the active low-memory page entries.
+    DOS guests receive the pre-PXE BIOS `INT 1Ah` vector rather than a pointer
+    into the firmware's conventional-memory hook. DN remains running while
+    RLOG is active instead of faulting in the `9B58` firmware segment.
+17. UNDI receive polling recognizes only a broadcast EtherType `88B5h` control
+    payload `RCTL 01 01 REBOOT`. A Pi-sent frame reset the SEJT and a fresh
+    timestamped RLOG session proved the complete remote-reboot/PXE cycle.
 
 ### Current deployed experiment
 
 The current image is the non-halting `kernel_pxe_netlog.elf`. It initializes
-and opens UNDI at ring 0, enters the ordinary RetroOS ring-1 boot path, and
-mirrors bounded kernel-log chunks into sequenced RLOG Ethernet frames. It does
-not call the broken `PXENV_UNDI_ISR`; accepted transmit buffers are never
-reused during the boot.
+and opens UNDI at ring 0, enters the ordinary RetroOS ring-1 boot path, mirrors
+bounded kernel-log chunks into sequenced RLOG Ethernet frames, polls
+`PXENV_UNDI_ISR` for completion/receive events, and accepts the dedicated RCTL
+reboot command. VGA logging remains simultaneous and DN boots normally.
 
 Current deployed SHA-256:
 
 ```text
-852d8651244ee10365ccd5cd744f9e468a20a4841dbe314f6f928ac42d906177
+eb76bf2fa95359ed6c41e1030e6a1dc1ea08023385125c44dcd76d9629c8d2b5
 ```
 
 This checksum was verified identical locally and at
 `/srv/tftp/boot/retroos/kernel.elf`. Deployment does not reboot the board.
 
-Immediate next action: determine which PXE call side effect makes DN's VM86
-environment fault in the `0x9Bxxx..0xA0000` region. Audit `map_pxe_identity()`
-and the temporary GDT/call stack lifecycle first. Preserve the now-working
-RLOG transport and receiver as the observation channel for every hardware
-iteration.
+Immediate next action: move UNDI/RLOG initialization earlier in the safe ring-0
+boot sequence and preserve or replay early boot messages. Preserve RLOG as the
+default observation channel for every hardware iteration.
 
 ### Important limitation for a possible future UDP logger
 
@@ -380,8 +387,7 @@ Before sending a real log, the kernel should test and display each result:
   - Interface is already started/initialized, or can be safely initialized.
   - UNDI open succeeds when required.
   - A harmless test transmit is accepted.
-  - Transmit completion normally uses the UNDI ISR path; Intel build 082's ISR
-    return is unusable here, so the bounded logger retains accepted buffers.
+  - Transmit completion and receive polling through the UNDI ISR path succeed.
 - Link configuration:
   - UNDI reports the board's source MAC address.
   - A broadcast frame with EtherType `88B5h` is accepted for transmission.

@@ -195,7 +195,16 @@ pub fn print<A: Arch>(machine: &A, screen: &mut crate::vga::Screen) {
                             crate::screenln!(screen,
                                 "M={:02X}{:02X}{:02X}{:02X}{:02X}{:02X}",
                                 mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
-                            transmit_test_frame(screen, a, mac);
+                            transmit_probe_frame(screen, a, mac, 1,
+                                b"HELLO FROM RETROOS SEJT!");
+                            let isr = undi_isr_smoke_test(screen, a);
+                            let mut report = [0u8; 16];
+                            report[..4].copy_from_slice(b"ISRB");
+                            for (i, value) in isr.iter().enumerate() {
+                                report[4 + i * 2..6 + i * 2]
+                                    .copy_from_slice(&value.to_be_bytes());
+                            }
+                            transmit_probe_frame(screen, a, mac, 2, &report);
                         }
                     }
                 }
@@ -243,15 +252,19 @@ fn print_get_info(
 }
 
 #[cfg(pxe_call_probe)]
-fn transmit_test_frame(
+fn transmit_probe_frame(
     screen: &mut crate::vga::Screen,
     pxe_phys: usize,
     source_mac: [u8; 6],
+    flags: u8,
+    payload: &[u8],
 ) {
     // One 4-KiB-aligned object cannot straddle a 64-KiB boundary, so the PXE
     // parameter block, TBD, and immediate frame share one temporary selector.
     let mut work = TxWorkspace([0u8; 512]);
     let base = work.0.as_mut_ptr() as usize;
+    let payload = &payload[..payload.len().min(30)];
+    let frame_len = (14 + 16 + payload.len()).max(TX_FRAME_LEN);
 
     // PXENV_UNDI_TRANSMIT: P_UNKNOWN means the complete Ethernet header is
     // already present. XMT_BROADCAST lets the driver know its destination.
@@ -260,18 +273,20 @@ fn transmit_test_frame(
     put_u16(&mut work.0, TX_PARAM + 8, ((base + TX_TBD) & 0xffff) as u16);
 
     // One immediate buffer and no additional data blocks.
-    put_u16(&mut work.0, TX_TBD, TX_FRAME_LEN as u16);
+    put_u16(&mut work.0, TX_TBD, frame_len as u16);
     put_u16(&mut work.0, TX_TBD + 2, ((base + TX_FRAME) & 0xffff) as u16);
     put_u16(&mut work.0, TX_TBD + 6, 0);
 
-    let frame = &mut work.0[TX_FRAME..TX_FRAME + TX_FRAME_LEN];
+    let frame = &mut work.0[TX_FRAME..TX_FRAME + frame_len];
     frame[..6].fill(0xff);
     frame[6..12].copy_from_slice(&source_mac);
     frame[12..14].copy_from_slice(&0x88B5u16.to_be_bytes());
     frame[14..18].copy_from_slice(b"RLOG");
     frame[18] = 1; // format version
-    frame[19] = 1; // test-frame flag
-    frame[20..44].copy_from_slice(b"HELLO FROM RETROOS SEJT!");
+    frame[19] = flags;
+    frame[20..28].fill(0); // diagnostic session and sequence
+    frame[28..30].copy_from_slice(&(payload.len() as u16).to_be_bytes());
+    frame[30..30 + payload.len()].copy_from_slice(payload);
 
     let pxe = (LOW_MEM_BASE + pxe_phys) as *const u8;
     let result = unsafe {
@@ -287,6 +302,50 @@ fn transmit_test_frame(
             u16::from_le_bytes([work.0[0], work.0[1]])),
         Err(e) => crate::screenln!(screen, "TX  SETUP E{:02X}", e),
     }
+}
+
+#[cfg(pxe_call_probe)]
+fn undi_isr_smoke_test(screen: &mut crate::vga::Screen, pxe_phys: usize) -> [u16; 6] {
+    let mut params = InfoParams([0u8; 192]);
+    let mut report = [0xffff; 6];
+
+    // START asks whether the pending interrupt belongs to UNDI.  PROCESS is
+    // valid only after START returns OUT_OURS (zero).  A transmit immediately
+    // precedes this test, so completion will commonly make it ours; NOT_OURS
+    // is also a valid smoke-test result when no interrupt is pending.
+    params.0[2..4].copy_from_slice(&1u16.to_le_bytes());
+    let start = unsafe { arch_pxe_call(0x0014, params.0.as_mut_ptr(), pxe_phys) };
+    let status = u16::from_le_bytes([params.0[0], params.0[1]]);
+    let flag = u16::from_le_bytes([params.0[2], params.0[3]]);
+    match start {
+        Ok(ax) => {
+            report[..3].copy_from_slice(&[ax, status, flag]);
+            crate::screenln!(screen, "ISR1 A{:04X} S{:04X} F{:04X}", ax, status, flag);
+        }
+        Err(e) => {
+            report[0] = 0xe000 | u16::from(e);
+            crate::screenln!(screen, "ISR1 E{:02X}", e);
+            return report;
+        }
+    }
+    if status != 0 || flag != 0 { return report; }
+
+    params.0.fill(0);
+    params.0[2..4].copy_from_slice(&2u16.to_le_bytes());
+    match unsafe { arch_pxe_call(0x0014, params.0.as_mut_ptr(), pxe_phys) } {
+        Ok(ax) => {
+            report[3..].copy_from_slice(&[ax,
+                u16::from_le_bytes([params.0[0], params.0[1]]),
+                u16::from_le_bytes([params.0[2], params.0[3]])]);
+            crate::screenln!(screen, "ISR2 A{:04X} S{:04X} F{:04X}",
+                report[3], report[4], report[5]);
+        }
+        Err(e) => {
+            report[3] = 0xe000 | u16::from(e);
+            crate::screenln!(screen, "ISR2 E{:02X}", e);
+        }
+    }
+    report
 }
 
 #[cfg(pxe_call_probe)]

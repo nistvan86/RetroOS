@@ -733,6 +733,10 @@ pub fn event_loop<A: crate::Arch>(
         // within one millisecond; the hardware queue only needs inspecting
         // once on that same device cadence. This bounds keyboard/audio wakeup
         // latency to 1 ms while avoiding a CLI/queue/STI round-trip per port.
+        #[cfg(pxe_netlog)]
+        if now_tick != last_event_drain_tick {
+            crate::arch::arch_pxe_netlog_poll();
+        }
         let events = if now_tick != last_event_drain_tick {
             last_event_drain_tick = now_tick;
             crate::kernel::irq_dispatch::drain(machine)

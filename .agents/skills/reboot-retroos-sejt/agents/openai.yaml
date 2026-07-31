@@ -1,0 +1,4 @@
+interface:
+  display_name: "Reboot RetroOS SEJT"
+  short_description: "Remotely reboot and verify the SEJT board"
+  default_prompt: "Use $reboot-retroos-sejt to reboot the SEJT over raw Ethernet and verify its next RLOG session."

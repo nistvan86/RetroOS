@@ -439,6 +439,19 @@ pub fn shutdown() -> ! {
     crate::halt_forever()
 }
 
+/// Warm-reset a legacy PC. Intel ICH exposes the reset-control register at
+/// CF9h; the 8042 pulse is retained as a fallback for older chipsets.
+pub fn reboot() -> ! {
+    cli();
+    outb(0xCF9, 0x06);
+    for _ in 0..100_000 { core::hint::spin_loop(); }
+    for _ in 0..65_536 {
+        if inb(0x64) & 0x02 == 0 { break; }
+    }
+    outb(0x64, 0xFE);
+    loop { hlt(); }
+}
+
 /// GDT pointer structure
 #[repr(C, packed)]
 pub struct GdtPtr {

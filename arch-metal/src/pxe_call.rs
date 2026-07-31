@@ -38,9 +38,9 @@ retroos_pxe_pm_call:
 
     /* Enter the helper through its temporary 16-bit code alias. The outer
      * call remains m16:32; the helper returns with lretl. */
-    mov edi, offset retroos_pxe_pm_call16
-    and edi, 0xffff
-    mov dword ptr [esp], edi
+    /* The temporary descriptor is based exactly at this helper.  Enter at
+     * offset zero so no instruction can straddle a 64-KiB alias boundary. */
+    mov dword ptr [esp], 0
     mov di, word ptr [ebp + 28]
     mov word ptr [esp + 4], di
     lcall [esp]
@@ -102,6 +102,7 @@ static NETLOG_PXE: AtomicU32 = AtomicU32::new(0);
 static NETLOG_SESSION: AtomicU32 = AtomicU32::new(0);
 static NETLOG_SEQUENCE: AtomicU32 = AtomicU32::new(0);
 static NETLOG_SLOT: AtomicU32 = AtomicU32::new(0);
+static GUEST_INT1A_ORIGINAL: AtomicU32 = AtomicU32::new(0);
 static mut NETLOG_MAC: [u8; 6] = [0; 6];
 
 const RLOG_HEADER_LEN: usize = 16;
@@ -120,12 +121,43 @@ static mut NETLOG_POOL: NetlogPool = NetlogPool([0; NETLOG_SLOT_SIZE * NETLOG_SL
 /// Retain the opened UNDI entry point and station address for later ring-1
 /// log flushes. Called once at ring 0 after STARTUP/INITIALIZE/OPEN succeeds.
 pub unsafe fn pxe_netlog_configure(pxe: *const u8, mac: [u8; 6], session: u32) {
+    // Build 082 hooks BIOS INT 1Ah and keeps the vector it chains to at
+    // CS:0100 (offset,segment). Preserve that pre-PXE vector for each DOS
+    // process's private IVT; the physical IVT remains hooked for UNDI.
+    let ivt = crate::LOW_MEM_BASE as *const u8;
+    let hook_offset = unsafe { core::ptr::read_unaligned(ivt.add(0x1a * 4) as *const u16) };
+    let hook_segment = unsafe { core::ptr::read_unaligned(ivt.add(0x1a * 4 + 2) as *const u16) };
+    let hook_linear = (u32::from(hook_segment) << 4).wrapping_add(u32::from(hook_offset));
+    if hook_linear < 0x10_0000 {
+        // The saved vector is relative to the firmware's code segment, not
+        // the handler offset within that segment.
+        let code_base = crate::LOW_MEM_BASE + (usize::from(hook_segment) << 4);
+        let old_offset = unsafe {
+            core::ptr::read_unaligned((code_base + 0x100) as *const u16)
+        };
+        let old_segment = unsafe {
+            core::ptr::read_unaligned((code_base + 0x102) as *const u16)
+        };
+        if old_offset != 0 || old_segment != 0 {
+            GUEST_INT1A_ORIGINAL.store(
+                u32::from(old_offset) | (u32::from(old_segment) << 16),
+                Ordering::Release,
+            );
+        }
+    }
     unsafe { NETLOG_MAC = mac; }
     NETLOG_PXE.store(pxe as u32, Ordering::Release);
     NETLOG_SESSION.store(session, Ordering::Relaxed);
     NETLOG_SEQUENCE.store(0, Ordering::Relaxed);
     NETLOG_SLOT.store(0, Ordering::Relaxed);
     NETLOG_READY.store(true, Ordering::Release);
+}
+
+pub(crate) fn pxe_guest_int1a_original() -> Option<u32> {
+    match GUEST_INT1A_ORIGINAL.load(Ordering::Acquire) {
+        0 => None,
+        vector => Some(vector),
+    }
 }
 
 /// Send one bounded RLOG payload. Returns zero when UNDI accepts the persistent
@@ -182,6 +214,63 @@ pub(crate) fn pxe_netlog_send(payload: *const u8, len: usize) -> u32 {
     0
 }
 
+#[repr(align(64))]
+struct IsrParams([u8; 32]);
+
+/// Drain a bounded UNDI interrupt batch and recognize the private raw-L2
+/// control frame: broadcast Ethernet, EtherType 88B5, payload
+/// `RCTL 01 01 REBOOT`. No IP stack or firmware DHCP state is involved.
+pub(crate) fn pxe_netlog_poll_reboot() -> bool {
+    if !NETLOG_READY.load(Ordering::Acquire) { return false; }
+    let pxe = NETLOG_PXE.load(Ordering::Acquire) as *const u8;
+    let mut params = IsrParams([0; 32]);
+    write_u16(&mut params.0, 2, 1); // PXENV_UNDI_ISR_IN_START
+    let Ok(ax) = (unsafe { pxe_pm_call(0x0014, params.0.as_mut_ptr(), pxe) }) else {
+        return false;
+    };
+    if ax != 0 || read_u16(&params.0, 0) != 0 || read_u16(&params.0, 2) != 0 {
+        return false; // failure or PXENV_UNDI_ISR_OUT_NOT_OURS
+    }
+
+    for input in core::iter::once(2u16).chain(core::iter::repeat_n(3u16, 7)) {
+        params.0.fill(0);
+        write_u16(&mut params.0, 2, input);
+        let Ok(ax) = (unsafe { pxe_pm_call(0x0014, params.0.as_mut_ptr(), pxe) }) else {
+            break;
+        };
+        if ax != 0 || read_u16(&params.0, 0) != 0 { break; }
+        match read_u16(&params.0, 2) {
+            0 => break, // PXENV_UNDI_ISR_OUT_DONE
+            3 if is_reboot_frame(&params.0) => return true,
+            2 | 3 | 4 => {} // transmit, receive, or busy
+            _ => break,
+        }
+    }
+    false
+}
+
+fn is_reboot_frame(params: &[u8]) -> bool {
+    let available = usize::from(read_u16(params, 4));
+    let frame_len = usize::from(read_u16(params, 6));
+    let offset = usize::from(read_u16(params, 10));
+    let selector = read_u16(params, 12);
+    let Some(base) = crate::descriptors::pxe_selector_base(selector) else { return false; };
+    let len = available.min(frame_len);
+    const CONTROL: &[u8] = b"RCTL\x01\x01REBOOT";
+    if len < 14 + CONTROL.len() || offset.checked_add(14 + CONTROL.len()).is_none() {
+        return false;
+    }
+    let frame = unsafe {
+        core::slice::from_raw_parts(
+            (crate::LOW_MEM_BASE + base as usize + offset) as *const u8,
+            14 + CONTROL.len(),
+        )
+    };
+    frame[..6] == [0xff; 6]
+        && frame[12..14] == 0x88B5u16.to_be_bytes()
+        && &frame[14..] == CONTROL
+}
+
 fn write_u16(bytes: &mut [u8], offset: usize, value: u16) {
     bytes[offset..offset + 2].copy_from_slice(&value.to_le_bytes());
 }
@@ -212,7 +301,6 @@ pub unsafe fn pxe_pm_call_with_param_segment(
     let count = unsafe { pxe.add(0x1d).read() };
     if entry_offset == 0 || entry_selector == 0 { return Err(5); }
 
-    crate::paging2::map_pxe_identity();
     let param_addr = params as u32;
     let trampoline_addr = core::ptr::addr_of!(retroos_pxe_pm_call16) as u32;
     let (param_selector, trampoline_selector) = unsafe {
@@ -224,6 +312,7 @@ pub unsafe fn pxe_pm_call_with_param_segment(
         if offset > 0xfffe { return Err(7); }
         unsafe { core::ptr::write_unaligned(params.add(offset) as *mut u16, param_selector); }
     }
+    let saved_low_memory = crate::paging2::map_pxe_identity();
     let status = unsafe {
         retroos_pxe_pm_call(
             opcode.into(),
@@ -234,5 +323,6 @@ pub unsafe fn pxe_pm_call_with_param_segment(
             trampoline_selector.into(),
         )
     };
+    crate::paging2::restore_pxe_identity(saved_low_memory);
     Ok(status)
 }

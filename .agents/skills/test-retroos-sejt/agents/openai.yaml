@@ -1,0 +1,4 @@
+interface:
+  display_name: "Test RetroOS on SEJT"
+  short_description: "Deploy and capture SEJT hardware logs"
+  default_prompt: "Use $test-retroos-sejt to deploy the current RetroOS change and capture its Raspberry Pi RLOG output."

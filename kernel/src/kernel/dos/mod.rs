@@ -740,6 +740,12 @@ pub fn exec_dos_into<A: crate::Arch>(machine: &mut A, threads: &mut [thread::Thr
     // one — no global clear needed.
     back_vga_window_if_emulated(machine);
     dos::setup_ivt(machine, &mut current.kernel.vcpu);
+    #[cfg(pxe_netlog)]
+    crate::dbg_println!(
+        "PXE guest IVT1A={:04X}:{:04X}",
+        machine.read::<u16>(0x1a * 4 + 2),
+        machine.read::<u16>(0x1a * 4),
+    );
 
     // The PSP environment program-name suffix — drive-qualified DOS form
     // ("C:\BIN\PROG.EXE"), which DOS extenders parse back to reopen their own EXE.

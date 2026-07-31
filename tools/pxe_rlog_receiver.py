@@ -14,6 +14,11 @@ PACKET_OUTGOING = 4
 HEADER = struct.Struct("!4sBBIIH")
 
 
+def timestamp() -> str:
+    """Local wall-clock timestamp with millisecond precision."""
+    return datetime.datetime.now().astimezone().isoformat(timespec="milliseconds")
+
+
 def mac(data: bytes) -> str:
     return ":".join(f"{byte:02x}" for byte in data)
 
@@ -31,7 +36,11 @@ def main() -> int:
 
     sock = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(ETH_P_ALL))
     sock.bind((args.interface, 0))
-    print(f"RLOG listener ready: {args.interface} EtherType=0x88B5 output={output}", flush=True)
+    print(
+        f"{timestamp()} RLOG listener ready: {args.interface} "
+        f"EtherType=0x88B5 output={output}",
+        flush=True,
+    )
 
     expected: dict[tuple[bytes, int], int] = {}
     with output.open("ab", buffering=0) as log:
@@ -51,9 +60,17 @@ def main() -> int:
             expected[key] = (sequence + 1) & 0xFFFFFFFF
             payload = frame[14 + HEADER.size : 14 + HEADER.size + length]
             log.write(payload)
-            text = payload.decode("utf-8", errors="backslashreplace").rstrip("\n")
+            if flags == 2 and len(payload) == 16 and payload[:4] == b"ISRB":
+                values = struct.unpack("!6H", payload[4:])
+                text = (
+                    f"ISR1 A={values[0]:04X} S={values[1]:04X} F={values[2]:04X}; "
+                    f"ISR2 A={values[3]:04X} S={values[4]:04X} F={values[5]:04X}"
+                )
+            else:
+                text = payload.decode("utf-8", errors="backslashreplace").rstrip("\n")
             print(
-                f"{mac(source)} session={session:08x} seq={sequence}{marker} "
+                f"{timestamp()} {mac(source)} session={session:08x} "
+                f"seq={sequence}{marker} "
                 f"flags={flags:02x} {text}",
                 flush=True,
             )
@@ -63,4 +80,4 @@ if __name__ == "__main__":
     try:
         raise SystemExit(main())
     except KeyboardInterrupt:
-        print("\nRLOG listener stopped", file=sys.stderr)
+        print(f"\n{timestamp()} RLOG listener stopped", file=sys.stderr)

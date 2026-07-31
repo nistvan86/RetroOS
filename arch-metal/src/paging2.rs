@@ -930,19 +930,46 @@ pub fn flush_tlb() {
     crate::x86::flush_tlb();
 }
 
-/// Restore a supervisor-only identity map of physical 0..1 MiB for a legacy
-/// PXE protected-mode runtime. The dedicated probe halts after its call, so
-/// this deliberately has no general-purpose unmap counterpart.
+/// Saved active low-memory mappings while legacy PXE temporarily needs a
+/// physical identity view.  These entries belong to the current DOS process
+/// and must be restored byte-for-byte after every firmware call.
 #[cfg(pxe_call_probe)]
-pub fn map_pxe_identity() {
-    fn map<E: Entry>(entries: &mut [E]) {
+pub struct PxeIdentityMap {
+    raw: [u64; 0x100],
+    wide: bool,
+}
+
+#[cfg(pxe_call_probe)]
+pub fn map_pxe_identity() -> PxeIdentityMap {
+    fn map<E: Entry>(entries: &mut [E], raw: &mut [u64; 0x100]) {
         for (i, slot) in entries.iter_mut().enumerate().take(0x100) {
+            raw[i] = slot.raw();
             *slot = E::new(i as u64, true, false);
         }
     }
+    let mut saved = PxeIdentityMap { raw: [0; 0x100], wide: false };
     match entries() {
-        Entries::E32(e) => map(e),
-        Entries::E64(e) => map(e),
+        Entries::E32(e) => map(e, &mut saved.raw),
+        Entries::E64(e) => {
+            saved.wide = true;
+            map(e, &mut saved.raw);
+        }
+    }
+    flush_tlb();
+    saved
+}
+
+#[cfg(pxe_call_probe)]
+pub fn restore_pxe_identity(saved: PxeIdentityMap) {
+    fn restore<E: Entry>(entries: &mut [E], raw: &[u64; 0x100]) {
+        for (slot, &value) in entries.iter_mut().zip(raw.iter()).take(0x100) {
+            slot.set_raw(value);
+        }
+    }
+    match entries() {
+        Entries::E32(e) if !saved.wide => restore(e, &saved.raw),
+        Entries::E64(e) if saved.wide => restore(e, &saved.raw),
+        _ => panic!("PXE call changed paging mode"),
     }
     flush_tlb();
 }
@@ -1660,6 +1687,12 @@ fn map_low_mem_user_generic<E: Entry>(entries: &mut [E]) {
             buf.as_mut_ptr(),
             PAGE_SIZE,
         );
+    }
+    #[cfg(pxe_call_probe)]
+    if let Some(vector) = crate::pxe_call::pxe_guest_int1a_original() {
+        // Do not expose PXE's conventional-memory INT 1Ah hook to VM86.  Its
+        // code is deliberately absent from each process's private RAM map.
+        buf[0x1a * 4..0x1a * 4 + 4].copy_from_slice(&vector.to_le_bytes());
     }
     let _ = fresh_temp_page();
     unsafe {

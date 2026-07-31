@@ -473,11 +473,11 @@ pub unsafe fn install_pxe_segments(
                 == candidate
         })
     }).ok_or(4u8)?;
-    unsafe {
-        GDT[trampoline_idx] = pxe_segment(
-            trampoline & 0xffff_0000, 0, true, false, 0,
-        );
-    }
+    // Base the alias at the helper itself and enter it at offset zero.  A
+    // 64-KiB-aligned alias once put the firmware call at offset 0xfffa in a
+    // particular link, so its valid return IP was 0xffff and the following
+    // three-byte instruction faulted while crossing the segment limit.
+    unsafe { GDT[trampoline_idx] = pxe_segment(trampoline, 0, true, false, 0); }
     Ok(((param_idx as u16) << 3, (trampoline_idx as u16) << 3))
 }
 

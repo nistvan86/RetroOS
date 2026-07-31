@@ -89,6 +89,17 @@ pub fn arch_pxe_netlog_send(payload: &[u8]) -> u32 {
     status
 }
 
+/// Poll retained UNDI for receive/completion events. A validated reboot
+/// control frame is acted on in ring 0 and therefore never returns here.
+pub fn arch_pxe_netlog_poll() {
+    unsafe {
+        core::arch::asm!(
+            "int 0x80",
+            in("eax") crate::arch_call::PXE_NETLOG_POLL as u32,
+        );
+    }
+}
+
 
 
 /// Set page permissions for a range. flags: bit 0 = writable, bit 1 = executable.

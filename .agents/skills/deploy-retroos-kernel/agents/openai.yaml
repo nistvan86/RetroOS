@@ -1,0 +1,4 @@
+interface:
+  display_name: "Deploy RetroOS Kernel"
+  short_description: "Publish kernels to the RetroOS PXE target"
+  default_prompt: "Use $deploy-retroos-kernel to build and deploy the current RetroOS kernel for D945GSEJT hardware testing."
