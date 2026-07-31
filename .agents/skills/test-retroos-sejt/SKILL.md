@@ -10,31 +10,37 @@ Use `deploy-retroos-kernel` for atomic publication and
 
 ## Workflow
 
-1. Preserve unrelated worktree changes. Run tests appropriate to the change.
-2. Build the ordinary kernel as a regression check and the RLOG-enabled kernel:
+Use the bundled iteration script by default. With no argument it installs the
+normal native VGA/BIOS GRUB entry. Pass `--exec <embedded-vfs-path>` only when
+the current test must start a specific embedded diagnostic:
 
-   ```bash
-   bazelisk build //kernel:kernel_elf //kernel:kernel_elf_pxe_netlog
-   ```
+```bash
+REPO_ROOT="${RETROOS_REPO_ROOT:-$(git rev-parse --show-toplevel)}"
+"$REPO_ROOT/.agents/skills/test-retroos-sejt/scripts/iterate.sh"
+"$REPO_ROOT/.agents/skills/test-retroos-sejt/scripts/iterate.sh" \
+    --exec boot/TESTS/VBELFB.EXE
+```
 
-3. Inspect the Pi runtime, then deploy only
-   `bazel-bin/kernel/kernel_pxe_netlog.elf`. Never deploy `kernel_bare.elf`.
-   Report local and Pi checksums; publication alone does not prove execution.
-4. Start the bundled listener in a long-running exec session:
+The script runs the ordinary and PXE/RLOG builds, inspects the Pi runtime,
+atomically deploys `kernel_pxe_netlog.elf`, configures the selected live GRUB
+entry, starts RLOG, waits for `RLOG listener ready`, sends exactly one RCTL
+reboot, and remains attached to the new boot log. Run it as one long-running
+agent command, wait on it proactively, and report the conclusion from each
+hardware iteration. Stop it with Ctrl-C after capturing the needed evidence.
 
-   ```bash
-   REPO_ROOT="${RETROOS_REPO_ROOT:-$(git rev-parse --show-toplevel)}"
-   "$REPO_ROOT/.agents/skills/test-retroos-sejt/scripts/listen_rlog.sh"
-   ```
+The `--exec` configuration changes only the live tmpfs GRUB file. It never
+changes the persistent seed, and the next invocation without `--exec` restores
+the normal entry during deployment.
 
-5. Wait for `RLOG listener ready`. If the running kernel supports RCTL, use
-   `reboot-retroos-sejt` and verify a new session automatically. Ask for a
-   manual restart only when the board is off, halted before receive polling,
-   or running an older kernel. Wait on the listener proactively.
-6. Interpret session/sequence continuity, payload, and VGA together. Prefer the
-   live SSH stream or read-only remote commands. Put copied captures under
-   local `/tmp`, never the repository, unless explicitly requested otherwise.
-7. Stop the listener cleanly unless continued monitoring was requested.
+Use the individual build, deploy, listener, and reboot helpers only to isolate
+a failure in one stage, to continue an already-running listener, or when the
+board is off, halted before receive polling, or running a kernel without RCTL.
+In those cases, start RLOG before requesting one manual reboot.
+
+Interpret session/sequence continuity, payload, and VGA together. Prefer the
+live SSH stream or read-only remote commands. Put copied captures under local
+`/tmp`, never the repository, unless explicitly requested otherwise.
+Stop the listener cleanly unless continued monitoring was requested.
 
 ## Configuration
 
