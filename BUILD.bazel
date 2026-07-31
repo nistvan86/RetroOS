@@ -138,6 +138,9 @@ _BOOTFS_FILES = {
     # means field-test iterations only require replacing kernel.elf on the
     # Windows-visible FAT boot partition, not rewriting the whole disk.
     "//test/dos/vbelfb:vbelfb_exe": "TESTS/VBELFB.EXE",
+    # VBELFB.EXE is a dosrt stub and loads this protected-mode runtime from
+    # its working directory before entering the appended ELF payload.
+    "//tools/dosrt:rloader_bin": "TESTS/RLOADER.BIN",
     "etc/CONFIG.BOOTFS": "CONFIG.SYS",
 }
 _BOOTFS_FILES.update(_DN_FILES)

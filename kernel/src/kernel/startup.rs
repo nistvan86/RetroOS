@@ -266,10 +266,15 @@ fn mount_filesystems(
 
     if ext.is_empty() {
         // No disk filesystem: the host fs IS the root if we have one, else the
-        // embedded bootfs at /boot is the whole world.
+        // DOS root is a volatile RAM overlay.  The embedded bootfs is mounted
+        // below it at C:\BOOT later, so diskless boots retain a traversable,
+        // writable C:\ without pretending the read-only TAR is the root.
         if hostfs {
             vfs::mount(b"", host_fs());
             crate::screenln!(screen, "hostfs mounted as root");
+        } else {
+            vfs::mount_ram_overlay(crate::kernel::dos::c_root());
+            crate::screenln!(screen, "RAM overlay mounted as C:\\ root");
         }
     } else {
         let root = root_index(&ext);

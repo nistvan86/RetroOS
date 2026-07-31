@@ -1023,6 +1023,14 @@ pub fn mount(prefix: &'static [u8], fs: &'static dyn Filesystem) {
     VFS.lock().mount(prefix, fs);
 }
 
+/// Materialize an otherwise-empty mount point whose files live in the VFS RAM
+/// overlay.  `EmptyFs` deliberately has no create implementation, so normal
+/// creates fall through to `ram_files`; mounting it here supplies the
+/// structural root directory that an entirely unmounted namespace lacks.
+pub fn mount_ram_overlay(prefix: &'static [u8]) {
+    VFS.lock().mount(prefix, &EMPTY_FS);
+}
+
 /// Mount `fs` and give it a write grant derived from the group owning `home`
 /// (a path within the new mount). Without this a mount is read-only, which is
 /// the safe default: a mount site cannot accidentally grant write access, only

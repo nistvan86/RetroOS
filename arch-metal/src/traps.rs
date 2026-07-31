@@ -290,10 +290,18 @@ fn arch_dispatch(regs: &mut Regs) {
             let base = regs.rcx as u32;
             let limit = regs.rbx as u32;
             let limit_in_pages = regs.rdi != 0;
-            regs.rax = crate::descriptors::set_tls_entry(index, base, limit, limit_in_pages) as u64;
-            // Also write FS_BASE MSR so 32-bit compat mode picks up the
-            // correct hidden base (the 32-bit iret path doesn't touch the MSR).
-            unsafe { crate::x86::wrmsr(0xC000_0100, base as u64); }
+            let result = crate::descriptors::set_tls_entry(index, base, limit, limit_in_pages);
+            regs.rax = result as u64;
+            // IA32_FS_BASE is only usable while long mode is active.  In
+            // ordinary 32-bit protected mode FS gets its base from the TLS
+            // descriptor above; attempting this WRMSR there raises #GP and
+            // can replace the panic that caused us to enter this path.
+            if result >= 0
+                && crate::paging2::cpu_supports_long_mode()
+                && crate::x86::rdmsr(crate::x86::EFER_MSR) & crate::x86::efer::LMA != 0
+            {
+                unsafe { crate::x86::wrmsr(0xC000_0100, base as u64); }
+            }
         }
         arch_call::SET_DEBUG_WATCH => {
             unsafe {
