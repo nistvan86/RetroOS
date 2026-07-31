@@ -24,6 +24,8 @@ mod traps;
 mod vcpu;
 pub mod x86;
 pub mod xhci;
+#[cfg(pxe_call_probe)]
+mod pxe_call;
 
 // === Metal-only boot data (consumed by the bring-up here and by the kernel's
 // `boot.rs` entry). On the interp backend none of this exists. ===
@@ -111,6 +113,8 @@ pub use descriptors::{USER_CS, USER_CS64, USER_DS};
 // arch API; the HW backend implements them as INT 0x80 stubs in `calls.rs`).
 pub use traps::arch_call;
 pub use calls::*;
+#[cfg(pxe_call_probe)]
+pub use pxe_call::{pxe_netlog_configure, pxe_pm_call, pxe_pm_call_with_param_segment};
 
 // Power/halt entry points. The kernel layer must not toggle IF directly —
 // `cli`/`sti` stay arch-private; use `halt_forever` (panic) and

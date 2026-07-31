@@ -930,6 +930,23 @@ pub fn flush_tlb() {
     crate::x86::flush_tlb();
 }
 
+/// Restore a supervisor-only identity map of physical 0..1 MiB for a legacy
+/// PXE protected-mode runtime. The dedicated probe halts after its call, so
+/// this deliberately has no general-purpose unmap counterpart.
+#[cfg(pxe_call_probe)]
+pub fn map_pxe_identity() {
+    fn map<E: Entry>(entries: &mut [E]) {
+        for (i, slot) in entries.iter_mut().enumerate().take(0x100) {
+            *slot = E::new(i as u64, true, false);
+        }
+    }
+    match entries() {
+        Entries::E32(e) => map(e),
+        Entries::E64(e) => map(e),
+    }
+    flush_tlb();
+}
+
 /// Remove identity mapping (call after switching to virtual addresses)
 ///
 /// Clears the first root entry (PD[0] for legacy, PDPT[0] for PAE)

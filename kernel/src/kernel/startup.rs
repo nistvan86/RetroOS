@@ -489,7 +489,7 @@ fn run<A: crate::Arch>(
                 core::str::from_utf8(path).unwrap_or("?"),
                 core::str::from_utf8(tail).unwrap_or(""),
                 core::str::from_utf8(cwd).unwrap_or("?"));
-            screen = run_program_with_screen(
+            (screen, _) = run_program_with_screen(
                 machine, threads, path, tail, cwd, master_env, boot.debug_watch,
                 screen,
             );
@@ -509,12 +509,53 @@ fn run<A: crate::Arch>(
 
     crate::screenln!(screen, "Starting DN...");
     let dn_path = [crate::kernel::dos::c_root(), b"boot/DN/DN.COM"].concat();
+    const SHORT_DN_RUN_MS: u64 = 5_000;
+    const MAX_SHORT_DN_RUNS: u8 = 3;
+    let mut consecutive_short_runs = 0u8;
     loop {
-        screen = run_program_with_screen(
+        let started = machine.get_ticks();
+        let result = run_program_with_screen(
             machine, threads, &dn_path, b"", b"", master_env, boot.debug_watch,
             screen,
         );
-        crate::screenln!(screen, "DN exited, restarting...");
+        screen = result.0;
+        let exit_code = result.1;
+        let elapsed = machine.get_ticks().wrapping_sub(started);
+
+        if elapsed < SHORT_DN_RUN_MS {
+            consecutive_short_runs += 1;
+        } else {
+            consecutive_short_runs = 0;
+        }
+
+        crate::screenln!(
+            screen,
+            "DN exited: status={:#010X} ({}) after {} ms",
+            exit_code as u32,
+            exit_code,
+            elapsed
+        );
+
+        if consecutive_short_runs >= MAX_SHORT_DN_RUNS {
+            crate::screenln!(
+                screen,
+                "DN stopped after {} short exits (<{} ms each).",
+                consecutive_short_runs,
+                SHORT_DN_RUN_MS
+            );
+            crate::screenln!(
+                screen,
+                "DOS fault status: 0x02NN means unhandled exception NN"
+            );
+            crate::screenln!(
+                screen,
+                "(for example 0x020D=#GP, 0x020E=#PF). System halted."
+            );
+            loop {
+                core::hint::spin_loop();
+            }
+        }
+        crate::screenln!(screen, "Restarting DN...");
     }
 }
 
@@ -528,12 +569,12 @@ fn run_program_with_screen<A: crate::Arch>(
     env: &[u8],
     debug_watch: Option<(u32, u32)>,
     screen: crate::kernel::platform::VisibleScreen,
-) -> crate::kernel::platform::VisibleScreen {
+) -> (crate::kernel::platform::VisibleScreen, i32) {
     let (screen, display) = screen.suspend(machine);
-    let display = run_program(
+    let (display, exit_code) = run_program(
         machine, threads, path, cmdline_tail, cwd, env, debug_watch, display,
     );
-    screen.resume(machine, display)
+    (screen.resume(machine, display), exit_code)
 }
 
 /// Load and run a single cmdline program until it exits. ELF binaries run
@@ -550,7 +591,7 @@ fn run_program<A: crate::Arch>(
     env: &[u8],
     debug_watch: Option<(u32, u32)>,
     display: crate::kernel::platform::DisplayToken,
-) -> crate::kernel::platform::DisplayToken {
+) -> (crate::kernel::platform::DisplayToken, i32) {
     use crate::kernel::{dos, exec};
 
     // A cmdline path is user-facing: accept both a full VFS path and a DOS
@@ -666,7 +707,7 @@ pub fn event_loop<A: crate::Arch>(
     machine: &mut A,
     threads: &mut [thread::Thread<A>],
     first_tid: usize,
-) -> crate::kernel::platform::DisplayToken {
+) -> (crate::kernel::platform::DisplayToken, i32) {
     crate::dbg_println!("event_loop entered, tid={}", first_tid);
     let mut ctx = crate::kernel::exec_ctx::ExecutionContext::seed(threads, first_tid);
     let mut stats = EventStats::new(machine);
@@ -746,10 +787,18 @@ pub fn event_loop<A: crate::Arch>(
                 );
             }
             crate::kernel::sched::Verdict::AllDead => {
+                // `exit_thread` leaves the status in the zombie until reap.
+                // Preserve the initial program's result for launchers such as
+                // the DN short-restart guard before honoring the loop's
+                // no-surviving-resources contract.
+                let exit_code = threads[first_tid].kernel.exit_code;
                 // The loop's contract: no thread resources survive it —
                 // callers never inherit zombies.
                 thread::reap_all_zombies(threads, machine);
-                return display_handoff.take().expect("dead display owner lost token");
+                return (
+                    display_handoff.take().expect("dead display owner lost token"),
+                    exit_code,
+                );
             }
         }
     }

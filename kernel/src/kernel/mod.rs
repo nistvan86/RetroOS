@@ -36,6 +36,7 @@ pub mod display;
 pub mod keyboard;
 pub mod kpipe;
 pub mod net;
+pub mod pxe;
 pub mod pci;
 pub mod portio;
 pub mod midi_bank;

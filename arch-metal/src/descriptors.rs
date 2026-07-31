@@ -356,7 +356,10 @@ const GDT_TLS_START: usize = 13;  // 0x68 — first of 3 per-thread TLS slots
 const GDT_TSS64_LO: usize = 16;   // 0x80 — TSS64 low (16-byte descriptor)
 #[allow(dead_code)] const GDT_TSS64_HI: usize = 17;   // 0x88 (always null — base[63:32] = 0 for <4GB)
 
-const GDT_ENTRIES: usize = 18;
+// PXE 2.1 supplies the selector values its protected-mode runtime expects.
+// Keep enough temporary slots to reproduce normal firmware selector layouts;
+// the ordinary RetroOS descriptors still occupy only the first 18 entries.
+const GDT_ENTRIES: usize = 8192;
 
 /// LDT selector (GDT index 12 * 8 = 0x60)
 pub const LDT_SEL: u16 = 0x60;
@@ -390,26 +393,108 @@ static BOOT_GDT: [GdtEntry; 3] = [
 ];
 
 // Static tables
-static mut GDT: [GdtEntry; GDT_ENTRIES] = [
-    GdtEntry::null(),               // 0x00: Null
-    GdtEntry::segment32(true, 0),   // 0x08: Kernel Code 32-bit (ring 0)
-    GdtEntry::segment64(0),         // 0x10: Kernel Code 64-bit (SYSCALL CS)
-    GdtEntry::segment32(false, 0),  // 0x18: Kernel Data (SYSCALL SS)
-    GdtEntry::segment32(true, 3),   // 0x20: User Code 32-bit (SYSRET base)
-    GdtEntry::segment32(false, 3),  // 0x28: User Data (SYSRET SS)
-    GdtEntry::segment64(3),         // 0x30: User Code 64-bit (SYSRET CS)
-    GdtEntry::null(),               // 0x38: TSS32 (filled at runtime)
-    GdtEntry::segment32(false, 3).with_base(0x400), // 0x40: BIOS Data Area alias (DPMI compat — see GDT_BIOS_DATA)
-    GdtEntry::null(),               // 0x48: reserved (was TSS64 high)
-    GdtEntry::segment32(true, 1),   // 0x50: Ring-1 Code 32-bit (flat, no wrapping yet)
-    GdtEntry::segment32(false, 1),  // 0x58: Ring-1 Data (flat, no wrapping yet)
-    GdtEntry::null(),               // 0x60: LDT (filled at runtime by load_ldt)
-    GdtEntry::null(),               // 0x68: TLS slot 0 (set_thread_area)
-    GdtEntry::null(),               // 0x70: TLS slot 1
-    GdtEntry::null(),               // 0x78: TLS slot 2
-    GdtEntry::null(),               // 0x80: TSS64 low (filled at runtime)
-    GdtEntry::null(),               // 0x88: TSS64 high (always null for <4GB)
-];
+static mut GDT: [GdtEntry; GDT_ENTRIES] = {
+    let mut gdt = [GdtEntry::null(); GDT_ENTRIES];
+    gdt[0] = GdtEntry::null();
+    gdt[1] = GdtEntry::segment32(true, 0);
+    gdt[2] = GdtEntry::segment64(0);
+    gdt[3] = GdtEntry::segment32(false, 0);
+    gdt[4] = GdtEntry::segment32(true, 3);
+    gdt[5] = GdtEntry::segment32(false, 3);
+    gdt[6] = GdtEntry::segment64(3);
+    gdt[7] = GdtEntry::null();
+    gdt[8] = GdtEntry::segment32(false, 3).with_base(0x400);
+    gdt[9] = GdtEntry::null();
+    gdt[10] = GdtEntry::segment32(true, 1);
+    gdt[11] = GdtEntry::segment32(false, 1);
+    gdt
+};
+#[cfg(pxe_call_probe)]
+fn pxe_segment(base: u32, _size: u16, code: bool, stack32: bool, dpl: u8) -> GdtEntry {
+    // The SEJT runtime reaches offset 0x0200 after advertising a boundary at
+    // 0x0200. Keep the complete 16-bit window while probing; the reported
+    // size remains printed by the kernel for comparison.
+    let limit = 0xffffu32;
+    GdtEntry {
+        limit_low: limit as u16,
+        base_low: base as u16,
+        base_mid: (base >> 16) as u8,
+        access: 0x80 | ((dpl & 3) << 5) | 0x10 | if code { 0x0a } else { 0x02 },
+        granularity: (if stack32 { 0x40 } else { 0 }) | ((limit >> 16) as u8 & 0x0f),
+        base_high: (base >> 24) as u8,
+    }
+}
+
+/// Install the nonzero selectors this firmware placed in the `!PXE` recipes.
+/// Some Intel implementations use those values internally even when
+/// FirstSelector is zero. Duplicate selector aliases retain their first entry
+/// (UNDICode before UNDICodeWrite). Returns selectors for the parameter block
+/// and a 16-bit code alias around the call trampoline.
+#[cfg(pxe_call_probe)]
+pub unsafe fn install_pxe_segments(
+    descs: *const u8,
+    count: u8,
+    params: u32,
+    trampoline: u32,
+) -> Result<(u16, u16), u8> {
+    let count = usize::from(count);
+    if count == 0 || count > 7 { return Err(1); }
+    for i in 0..count {
+        let p = unsafe { descs.add(i * 8) };
+        let selector = unsafe { core::ptr::read_unaligned(p as *const u16) };
+        if selector == 0 { continue; }
+        if selector & 0x04 != 0 { return Err(2); }
+        let idx = usize::from(selector >> 3);
+        if idx >= GDT_ENTRIES { return Err(6); }
+        if idx <= GDT_RING1_DS { return Err(3); }
+        let duplicate = (0..i).any(|j| unsafe {
+            core::ptr::read_unaligned(descs.add(j * 8) as *const u16) == selector
+        });
+        if duplicate { continue; }
+        let base = unsafe { core::ptr::read_unaligned(p.add(2) as *const u32) };
+        let size = unsafe { core::ptr::read_unaligned(p.add(6) as *const u16) };
+        let code = i == 2 || i == 5;
+        let stack32 = i == 0;
+        unsafe { GDT[idx] = pxe_segment(base, size, code, stack32, (selector & 3) as u8); }
+    }
+
+    // The API receives a 16:16 far pointer. Give the kernel-stack parameter
+    // block its own 64-KiB data window and pass its low 16 bits as the offset.
+    let param_idx = (18..GDT_ENTRIES).find(|&candidate| {
+        !(0..count).any(|j| unsafe {
+            usize::from(core::ptr::read_unaligned(descs.add(j * 8) as *const u16) >> 3)
+                == candidate
+        })
+    }).ok_or(4u8)?;
+    unsafe { GDT[param_idx] = pxe_segment(params & 0xffff_0000, 0, false, true, 0); }
+    let trampoline_idx = (param_idx + 1..GDT_ENTRIES).find(|&candidate| {
+        !(0..count).any(|j| unsafe {
+            usize::from(core::ptr::read_unaligned(descs.add(j * 8) as *const u16) >> 3)
+                == candidate
+        })
+    }).ok_or(4u8)?;
+    unsafe {
+        GDT[trampoline_idx] = pxe_segment(
+            trampoline & 0xffff_0000, 0, true, false, 0,
+        );
+    }
+    Ok(((param_idx as u16) << 3, (trampoline_idx as u16) << 3))
+}
+
+/// Base address currently installed for a GDT selector. Used only by the PXE
+/// probe to emulate old firmware self-patches that address writable code via
+/// a CS override (which protected mode correctly rejects).
+#[cfg(pxe_call_probe)]
+pub(crate) fn pxe_selector_base(selector: u16) -> Option<u32> {
+    if selector & 0x04 != 0 { return None; }
+    let idx = usize::from(selector >> 3);
+    if idx >= GDT_ENTRIES { return None; }
+    let e = unsafe { GDT[idx] };
+    if e.access & 0x80 == 0 { return None; }
+    Some(u32::from(e.base_low)
+        | (u32::from(e.base_mid) << 16)
+        | (u32::from(e.base_high) << 24))
+}
 
 static mut IDT32: Idt32 = Idt32 {
     entries: [IdtEntry32::null(); IDT_ENTRIES],

@@ -8,6 +8,8 @@ use arch::{paging2, phys_mm, descriptors, irq, x86};
 use crate::vga;
 use arch::MultibootMmapEntry;
 use paging2::{PAGE_SIZE, LOW_MEM_BASE};
+#[cfg(pxe_netlog)]
+use core::sync::atomic::{AtomicBool, Ordering};
 
 /// Kernel physical load address (must match KERNEL_PHYS in kernel.ld)
 pub const KERNEL_PHYS: usize = 0x0010_0000;
@@ -27,6 +29,55 @@ static ALLOCATOR: lib::heap::DemandHeap = lib::heap::DemandHeap::new();
 /// issuing a port op itself.
 fn log_byte_0xe9(b: u8) {
     x86::outb(0xE9, b);
+}
+
+#[cfg(pxe_netlog)]
+static NETLOG_ENABLED: AtomicBool = AtomicBool::new(false);
+#[cfg(pxe_netlog)]
+static NETLOG_BUSY: AtomicBool = AtomicBool::new(false);
+#[cfg(pxe_netlog)]
+static NETLOG_SENT: AtomicBool = AtomicBool::new(false);
+#[cfg(pxe_netlog)]
+static mut NETLOG_BUF: [u8; 512] = [0; 512];
+#[cfg(pxe_netlog)]
+static mut NETLOG_LEN: usize = 0;
+
+#[cfg(pxe_netlog)]
+fn log_byte_pxe(b: u8) {
+    // Preserve both pre-existing destinations. VGA rendering happens before
+    // the sink is called by Screen/putchar and is therefore unaffected.
+    x86::outb(0xE9, b);
+    crate::kernel::klog::push_byte(b);
+    if !NETLOG_ENABLED.load(Ordering::Relaxed) || b == b'\r' { return; }
+
+    unsafe {
+        if NETLOG_LEN < 512 {
+            NETLOG_BUF[NETLOG_LEN] = b;
+            NETLOG_LEN += 1;
+        }
+        // Send the first complete line immediately as a health marker, then
+        // batch later lines to make the finite never-reused pool useful.
+        let flush = NETLOG_LEN == 512
+            || (b == b'\n' && (!NETLOG_SENT.load(Ordering::Relaxed) || NETLOG_LEN >= 256));
+        if !flush || !at_ring1() || NETLOG_BUSY.swap(true, Ordering::Acquire) { return; }
+        let data = core::slice::from_raw_parts(core::ptr::addr_of!(NETLOG_BUF) as *const u8, NETLOG_LEN);
+        let status = arch::arch_pxe_netlog_send(data);
+        NETLOG_LEN = 0;
+        if status == 0 { NETLOG_SENT.store(true, Ordering::Relaxed); }
+        NETLOG_BUSY.store(false, Ordering::Release);
+        if status != 0 {
+            // Remote logging is best-effort. Never disturb VGA, debugcon, RAM
+            // klog, or normal boot after any firmware/transmit failure.
+            NETLOG_ENABLED.store(false, Ordering::Relaxed);
+        }
+    }
+}
+
+#[cfg(pxe_netlog)]
+fn at_ring1() -> bool {
+    let cs: u16;
+    unsafe { core::arch::asm!("mov {0:x}, cs", out(reg) cs, options(nomem, nostack, preserves_flags)); }
+    cs & 3 != 0
 }
 
 /// Magic value the Multiboot bootloader places in EAX before jumping to us.
@@ -249,15 +300,33 @@ pub unsafe extern "C" fn boot_kernel(magic: u32, info: *const arch::MultibootInf
     // freeze-at-first-IRQ on real hardware is readable instead of a black hang.
     irq::timer_selftest(&mut screen);
 
+    // PXE's protected-mode selectors require CPL0. The diagnostic target calls
+    // the firmware before the ordinary kernel drops to ring 1.
+    let mut machine = arch::Metal;
+    #[cfg(pxe_probe_only)]
+    {
+        screen.clear();
+        lib::screenln!(screen, "PXE/UNDI HANDOFF PROBE");
+        crate::kernel::pxe::print(&machine, &mut screen);
+        arch::halt_forever();
+    }
+
+    #[cfg(pxe_netlog)]
+    let pxe_netlog_ready = crate::kernel::pxe::netlog_init(&machine, &mut screen);
+
     descriptors::enter_ring1();
+
+    #[cfg(pxe_netlog)]
+    if pxe_netlog_ready {
+        NETLOG_ENABLED.store(true, Ordering::Relaxed);
+        crate::vga::set_debug_sink(log_byte_pxe);
+    }
 
     lib::screenln!(screen, "Ring1 entered, paging + interrupts + syscall setup complete");
 
     // The arch backend handle, threaded as `&mut` through the kernel from here
     // on so its mutable state is borrow-checked rather than global. Lives for
     // the rest of the kernel's life (startup never returns).
-    let mut machine = arch::Metal;
-
     lib::screenln!(screen, "Heap base: {:#x}", arch::heap_base());
 
     crate::kernel::startup::startup(&mut machine, &config, screen);

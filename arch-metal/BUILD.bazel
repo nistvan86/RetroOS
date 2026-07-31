@@ -13,6 +13,9 @@ rust_library(
         "-Cpanic=abort",
         "-Crelocation-model=static",
         "-Cforce-frame-pointers=yes",
+        # Only referenced by the dedicated PXE probe variant; harmless in the
+        # ordinary metal library and keeps the arch crate's API available.
+        "--cfg=pxe_call_probe",
     ],
     deps = ["//arch-abi", "//lib"],
 )

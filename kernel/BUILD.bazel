@@ -72,6 +72,84 @@ rust_library(
     }),
 )
 
+# PXE/UNDI handoff probe variant. This is a separate rlib so the compile-time
+# probe-and-halt path cannot affect the normal kernel or hosted binaries.
+rust_library(
+    name = "kernel_pxe_probe",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "kernel",
+    edition = "2024",
+    visibility = ["//visibility:public"],
+    rustc_flags = [
+        "-Cpanic=abort",
+        "-Crelocation-model=static",
+        "--cfg=pxe_probe_only",
+        "--cfg=pxe_call_probe",
+    ] + select({
+        ":metal": [
+            "-Copt-level=s",
+            "-Cforce-frame-pointers=yes",
+        ],
+        "//conditions:default": [],
+    }),
+    deps = [
+        "//arch-abi",
+        "//lib",
+        "//lib:sound",
+        "//third_party/lwext4:lwext4",
+        "//third_party/lwext4:lwext4-sys",
+        "@nuked_opl3//:nuked_opl3",
+    ] + select({
+        ":metal": [
+            "//arch-metal",
+            "@spin//:spin",
+        ],
+        "//conditions:default": [
+            "@crates//:rustc-demangle",
+            "@crates//:spin",
+        ],
+    }),
+)
+
+# PXE raw-Ethernet logger variant. Unlike the diagnostic probe this follows
+# the normal ring-1 boot path; only its debug sink is extended with UNDI RLOG.
+rust_library(
+    name = "kernel_pxe_netlog",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "kernel",
+    edition = "2024",
+    visibility = ["//visibility:public"],
+    rustc_flags = [
+        "-Cpanic=abort",
+        "-Crelocation-model=static",
+        "--cfg=pxe_call_probe",
+        "--cfg=pxe_netlog",
+    ] + select({
+        ":metal": [
+            "-Copt-level=s",
+            "-Cforce-frame-pointers=yes",
+        ],
+        "//conditions:default": [],
+    }),
+    deps = [
+        "//arch-abi",
+        "//lib",
+        "//lib:sound",
+        "//third_party/lwext4:lwext4",
+        "//third_party/lwext4:lwext4-sys",
+        "@nuked_opl3//:nuked_opl3",
+    ] + select({
+        ":metal": [
+            "//arch-metal",
+            "@spin//:spin",
+        ],
+        "//conditions:default": [
+            "@crates//:rustc-demangle",
+            "@crates//:spin",
+        ],
+    }),
+)
+
 # ============================================================================
 # Metal entry: the bootable kernel.elf, produced by rustc-linking the kernel
 # rlib (+ arch-metal, pulled transitively) with the asm entry stub and the
@@ -142,6 +220,56 @@ rust_binary(
     ],
 )
 
+rust_binary(
+    name = "kernel_elf_pxe_probe_bin",
+    srcs = ["metal_entry.rs"],
+    crate_name = "kernel_metal",
+    edition = "2024",
+    compile_data = [":kernel_ld", ":entry", ":bootfs_empty_obj", "//third_party/lwext4:lwext4_obj"],
+    rustc_flags = [
+        "-Cpanic=abort",
+        "-Crelocation-model=static",
+        "-Clink-self-contained=+linker",
+        "-Clinker-flavor=ld.lld",
+        "-Clinker=rust-lld",
+        "-Clink-arg=-T$(location :kernel_ld)",
+        "-Clink-arg=$(location :entry)",
+        "-Clink-arg=$(location :bootfs_empty_obj)",
+        "-Clink-arg=$(location //third_party/lwext4:lwext4_obj)",
+        "-Clink-arg=-nostdlib",
+        "-Clink-arg=-no-pie",
+    ],
+    deps = [
+        ":kernel_pxe_probe",
+        "//arch-metal",
+    ],
+)
+
+rust_binary(
+    name = "kernel_elf_pxe_netlog_bin",
+    srcs = ["metal_entry.rs"],
+    crate_name = "kernel_metal",
+    edition = "2024",
+    compile_data = [":kernel_ld", ":entry", ":bootfs_obj", "//third_party/lwext4:lwext4_obj"],
+    rustc_flags = [
+        "-Cpanic=abort",
+        "-Crelocation-model=static",
+        "-Clink-self-contained=+linker",
+        "-Clinker-flavor=ld.lld",
+        "-Clinker=rust-lld",
+        "-Clink-arg=-T$(location :kernel_ld)",
+        "-Clink-arg=$(location :entry)",
+        "-Clink-arg=$(location :bootfs_obj)",
+        "-Clink-arg=$(location //third_party/lwext4:lwext4_obj)",
+        "-Clink-arg=-nostdlib",
+        "-Clink-arg=-no-pie",
+    ],
+    deps = [
+        ":kernel_pxe_netlog",
+        "//arch-metal",
+    ],
+)
+
 # Keep the `//kernel:kernel_elf` label and the `kernel.elf` filename stable
 # (run.sh reads bazel-bin/kernel/kernel.elf; //:image + the md5 genrule consume
 # the label).
@@ -157,6 +285,22 @@ genrule(
     name = "kernel_elf_bare",
     srcs = [":kernel_elf_bare_bin"],
     outs = ["kernel_bare.elf"],
+    cmd = "cp $< $@",
+    visibility = ["//visibility:public"],
+)
+
+genrule(
+    name = "kernel_elf_pxe_probe",
+    srcs = [":kernel_elf_pxe_probe_bin"],
+    outs = ["kernel_pxe_probe.elf"],
+    cmd = "cp $< $@",
+    visibility = ["//visibility:public"],
+)
+
+genrule(
+    name = "kernel_elf_pxe_netlog",
+    srcs = [":kernel_elf_pxe_netlog_bin"],
+    outs = ["kernel_pxe_netlog.elf"],
     cmd = "cp $< $@",
     visibility = ["//visibility:public"],
 )

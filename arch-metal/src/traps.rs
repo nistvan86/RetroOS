@@ -106,6 +106,7 @@ pub mod arch_call {
     pub const DMA_CHANNEL_BUF: u64 = 0x11D;   // EDX=channel 0-7 -> EAX=phys page of its permanent DMA buffer
     pub const MAP_FRESH_RANGE: u64 = 0x11E;   // EDX=vpage_start, ECX=count — replace range with fresh anon frames
     pub const HALT: u64 = 0x11F;              // cli + hlt forever at ring 0 (never returns)
+    pub const PXE_NETLOG_SEND: u64 = 0x120;   // EDX=payload, ECX=len -> EAX=status
 }
 
 static DEBUG_WATCH_COUNT: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
@@ -261,6 +262,12 @@ fn arch_dispatch(regs: &mut Regs) {
         arch_call::HALT => {
             x86::cli();
             loop { x86::hlt(); }
+        }
+        arch_call::PXE_NETLOG_SEND => {
+            regs.rax = crate::pxe_call::pxe_netlog_send(
+                regs.rdx as usize as *const u8,
+                regs.rcx as usize,
+            ) as u64;
         }
         arch_call::REARM_IRQ => {
             crate::irq::rearm_irq(regs.rdx as u8);
@@ -420,6 +427,27 @@ pub extern "C" fn isr_handler(stack: *mut StackFrame, from_64: bool) -> bool {
     // sentinel — preserve it so ring3 can route it to `KE::Syscall`.
     let raw_int_num = if raw_int_num == 256 { 256 } else { raw_int_num & 0xFF };
 
+    #[cfg(pxe_call_probe)]
+    if !from_64 && !vm86 && raw_int_num == 0x1A && (raw_cs & 3) == 0 {
+        // The retained Intel UNDI uses the legacy PCI BIOS interface while
+        // starting. RetroOS owns the protected-mode IDT, so provide the
+        // common B1xx services directly and resume at the instruction after
+        // INT 1Ah. Unknown PCI functions return the standard unsupported
+        // status; non-PCI INT 1Ah calls still take the diagnostic fault path.
+        let r = unsafe { &mut (*stack).raw32.0 };
+        if pxe_pci_bios(r) {
+            return false;
+        }
+    }
+
+    #[cfg(pxe_call_probe)]
+    if !from_64 && !vm86 && raw_int_num == 13 && raw_err_code == 0 && (raw_cs & 3) == 0 {
+        let r = unsafe { &mut (*stack).raw32.0 };
+        if pxe_emulate_cs_write(r) {
+            return false;
+        }
+    }
+
     if !vm86 && (raw_cs & 3) == 0 {  // from ring 0?
         // An unhandled ring-0 exception is headed for the panic in
         // handle_ring0. The most common cause is the exit path's `iret` /
@@ -430,6 +458,40 @@ pub extern "C" fn isr_handler(stack: *mut StackFrame, from_64: bool) -> bool {
         // with it. Dump the words so the panic names the bad frame.
         if !from_64 && !(raw_int_num == 14 || (32..=47).contains(&raw_int_num)) {
             let p = unsafe { core::ptr::addr_of!((*stack).raw32.0.esp) };
+            #[cfg(pxe_call_probe)]
+            {
+                // The Intel PXE entry code faults immediately after loading a
+                // far pointer from [EBP+0x0e].  Preserve the firmware's saved
+                // EBP and the six words surrounding that exact argument.  The
+                // grouped fields are deliberately short and OCR-friendly.
+                let ebp = unsafe { (*stack).raw32.0.ebp };
+                let args = (ebp as usize + 0x0a) as *const u16;
+                let r = unsafe { &(*stack).raw32.0 };
+                let mut screen = lib::vga::Screen::new();
+                lib::screenln!(screen, "BP={:08X}", ebp);
+                lib::screenln!(screen, "P={:04X} {:04X} {:04X} {:04X} {:04X} {:04X}",
+                    unsafe { args.read_volatile() }, unsafe { args.add(1).read_volatile() },
+                    unsafe { args.add(2).read_volatile() }, unsafe { args.add(3).read_volatile() },
+                    unsafe { args.add(4).read_volatile() }, unsafe { args.add(5).read_volatile() });
+                lib::screenln!(screen, "R A={:04X} B={:04X} C={:04X} D={:04X} S={:04X} I={:04X}",
+                    r.eax as u16, r.ebx as u16, r.ecx as u16,
+                    r.edx as u16, r.esi as u16, r.edi as u16);
+                if let Some(base) = crate::descriptors::pxe_selector_base(r.cs as u16) {
+                    if base < 0xA0000 && (8..=0xFFF8).contains(&r.eip) {
+                        let q = (base + r.eip - 8) as *const u8;
+                        lib::screenln!(screen, "F0={:02X}{:02X} {:02X}{:02X} {:02X}{:02X} {:02X}{:02X}",
+                            unsafe { q.read_volatile() }, unsafe { q.add(1).read_volatile() },
+                            unsafe { q.add(2).read_volatile() }, unsafe { q.add(3).read_volatile() },
+                            unsafe { q.add(4).read_volatile() }, unsafe { q.add(5).read_volatile() },
+                            unsafe { q.add(6).read_volatile() }, unsafe { q.add(7).read_volatile() });
+                        lib::screenln!(screen, "F1={:02X}{:02X} {:02X}{:02X} {:02X}{:02X} {:02X}{:02X}",
+                            unsafe { q.add(8).read_volatile() }, unsafe { q.add(9).read_volatile() },
+                            unsafe { q.add(10).read_volatile() }, unsafe { q.add(11).read_volatile() },
+                            unsafe { q.add(12).read_volatile() }, unsafe { q.add(13).read_volatile() },
+                            unsafe { q.add(14).read_volatile() }, unsafe { q.add(15).read_volatile() });
+                    }
+                }
+            }
             lib::println!("ring0 fault: words above the trap frame (iret-target frame):");
             for i in 0..10 {
                 lib::println!("  [esp+{:2}] = {:#010x}", i * 4, unsafe { p.add(i).read_volatile() });
@@ -933,11 +995,225 @@ fn handle_ring0(int_num: u64, error: u64, cs: u64, eip: u64) {
             regs.int_num = int_num;
             handle_irq(&mut regs);
         }
-        _ => panic!("Unhandled exception in arch: int={:#x} err={:#x} at {:#06x}:{:#010x}", int_num, error, cs, eip),
+        _ => {
+            #[cfg(pxe_call_probe)]
+            {
+                // Preserve the PXE probe report already on screen. The normal
+                // panic handler clears it and emits a long backtrace, which is
+                // actively unhelpful on photograph-only hardware.
+                let mut screen = lib::vga::Screen::new();
+                lib::screenln!(screen, "PXE FAULT I={:02X} E={:04X}", int_num, error);
+                lib::screenln!(screen, "AT {:04X}:{:08X}", cs, eip);
+                crate::halt_forever();
+            }
+            #[cfg(not(pxe_call_probe))]
+            panic!("Unhandled exception in arch: int={:#x} err={:#x} at {:#06x}:{:#010x}", int_num, error, cs, eip)
+        }
     }
 }
 
 const VM_FLAG: u64 = 1 << 17;
+
+#[cfg(pxe_call_probe)]
+fn pxe_pci_bios(r: &mut Raw32) -> bool {
+    const CF: u32 = 1;
+    const OK: u8 = 0x00;
+    const UNSUPPORTED: u8 = 0x81;
+    const NOT_FOUND: u8 = 0x86;
+    const BAD_REGISTER: u8 = 0x87;
+
+    let ax = r.eax as u16;
+    if ax >> 8 != 0xB1 {
+        return false;
+    }
+
+    let mut status = OK;
+    match ax as u8 {
+        0x01 => {
+            // PCI BIOS installation check: configuration mechanism #1,
+            // interface version 2.10, and the full conventional bus range.
+            r.eax = (r.eax & 0xFFFF_0000) | 0x0001;
+            r.ebx = (r.ebx & 0xFFFF_0000) | 0x0210;
+            r.ecx = (r.ecx & 0xFFFF_FF00) | 0xFF;
+            r.edx = 0x2049_4350; // "PCI "
+        }
+        0x02 => {
+            let vendor = r.edx as u16;
+            let device = r.ecx as u16;
+            match pci_find(r.esi as u16, |v| {
+                v as u16 == vendor && (v >> 16) as u16 == device
+            }) {
+                Some((bus, devfn)) => set_bx_location(r, bus, devfn),
+                None => status = NOT_FOUND,
+            }
+        }
+        0x03 => {
+            let class = r.ecx & 0x00FF_FFFF;
+            match pci_find_class(r.esi as u16, class) {
+                Some((bus, devfn)) => set_bx_location(r, bus, devfn),
+                None => status = NOT_FOUND,
+            }
+        }
+        0x08 | 0x09 | 0x0A => {
+            let off = r.edi as u16;
+            let width = match ax as u8 { 0x08 => 1, 0x09 => 2, _ => 4 };
+            if !pci_register_valid(off, width) {
+                status = BAD_REGISTER;
+            } else {
+                let value = pci_cfg_read(location_bus(r), location_devfn(r), off as u8);
+                let shift = u32::from((off as u8 & 3) * 8);
+                match width {
+                    1 => r.ecx = (r.ecx & !0xFF) | ((value >> shift) & 0xFF),
+                    2 => r.ecx = (r.ecx & !0xFFFF) | ((value >> shift) & 0xFFFF),
+                    _ => r.ecx = value,
+                }
+            }
+        }
+        0x0B | 0x0C | 0x0D => {
+            let off = r.edi as u16;
+            let width = match ax as u8 { 0x0B => 1, 0x0C => 2, _ => 4 };
+            if !pci_register_valid(off, width) {
+                status = BAD_REGISTER;
+            } else {
+                pci_cfg_write(location_bus(r), location_devfn(r), off as u8, width, r.ecx);
+            }
+        }
+        _ => status = UNSUPPORTED,
+    }
+
+    r.eax = (r.eax & !0xFF00) | (u32::from(status) << 8);
+    if status == OK { r.eflags &= !CF; } else { r.eflags |= CF; }
+    true
+}
+
+#[cfg(pxe_call_probe)]
+fn pxe_emulate_cs_write(r: &mut Raw32) -> bool {
+    let Some(base) = crate::descriptors::pxe_selector_base(r.cs as u16) else { return false; };
+    // PXE runtime images live below VGA memory. Do not turn this narrowly
+    // matched probe workaround into a generic kernel #GP bypass.
+    if base >= 0xA0000 || r.eip > 0xFFFF { return false; }
+    let ip = (base + r.eip) as *const u8;
+    let b = unsafe {
+        [ip.read_volatile(), ip.add(1).read_volatile(), ip.add(2).read_volatile()]
+    };
+    let read_u16 = |offset: usize| unsafe {
+        core::ptr::read_unaligned(ip.add(offset) as *const u16)
+    };
+
+    match b {
+        // 2E 89 /r with mod=00,r/m=110: MOV CS:[disp16], r16.
+        [0x2E, 0x89, modrm] if modrm & 0xC7 == 0x06 => {
+            let value = match (modrm >> 3) & 7 {
+                0 => r.eax as u16,
+                1 => r.ecx as u16,
+                2 => r.edx as u16,
+                3 => r.ebx as u16,
+                4 => r.esp_dummy as u16,
+                5 => r.ebp as u16,
+                6 => r.esi as u16,
+                _ => r.edi as u16,
+            };
+            let dst = (base + u32::from(read_u16(3))) as *mut u16;
+            unsafe { dst.write_volatile(value); }
+            r.eip += 5;
+        }
+        // 2E C7 06 disp16 imm16: MOV word CS:[disp16], imm16.
+        [0x2E, 0xC7, 0x06] => {
+            let dst = (base + u32::from(read_u16(3))) as *mut u16;
+            unsafe { dst.write_volatile(read_u16(5)); }
+            r.eip += 7;
+        }
+        // 2E FF 06 disp16: INC word CS:[disp16].
+        [0x2E, 0xFF, 0x06] => {
+            let dst = (base + u32::from(read_u16(3))) as *mut u16;
+            let old = unsafe { dst.read_volatile() };
+            unsafe { dst.write_volatile(old.wrapping_add(1)); }
+            r.eip += 5;
+        }
+        // 66 2E A3 disp16: MOV dword CS:[disp16], EAX.
+        [0x66, 0x2E, 0xA3] => {
+            let dst = (base + u32::from(read_u16(3))) as *mut u32;
+            unsafe { dst.write_unaligned(r.eax); }
+            r.eip += 5;
+        }
+        // 2E A3 disp16: MOV word CS:[disp16], AX.
+        [0x2E, 0xA3, _] => {
+            let dst = (base + u32::from(read_u16(2))) as *mut u16;
+            unsafe { dst.write_unaligned(r.eax as u16); }
+            r.eip += 4;
+        }
+        _ => return false,
+    }
+    true
+}
+
+#[cfg(pxe_call_probe)]
+fn location_bus(r: &Raw32) -> u8 { (r.ebx >> 8) as u8 }
+
+#[cfg(pxe_call_probe)]
+fn location_devfn(r: &Raw32) -> u8 { r.ebx as u8 }
+
+#[cfg(pxe_call_probe)]
+fn set_bx_location(r: &mut Raw32, bus: u8, devfn: u8) {
+    r.ebx = (r.ebx & 0xFFFF_0000) | (u32::from(bus) << 8) | u32::from(devfn);
+}
+
+#[cfg(pxe_call_probe)]
+fn pci_register_valid(off: u16, width: u8) -> bool {
+    off < 256 && off % u16::from(width) == 0 && off + u16::from(width) <= 256
+}
+
+#[cfg(pxe_call_probe)]
+fn pci_cfg_addr(bus: u8, devfn: u8, off: u8) -> u32 {
+    0x8000_0000 | (u32::from(bus) << 16) | (u32::from(devfn) << 8)
+        | (u32::from(off) & 0xFC)
+}
+
+#[cfg(pxe_call_probe)]
+fn pci_cfg_read(bus: u8, devfn: u8, off: u8) -> u32 {
+    x86::outl(0xCF8, pci_cfg_addr(bus, devfn, off));
+    x86::inl(0xCFC)
+}
+
+#[cfg(pxe_call_probe)]
+fn pci_cfg_write(bus: u8, devfn: u8, off: u8, width: u8, value: u32) {
+    let shift = u32::from((off & 3) * 8);
+    let output = match width {
+        1 => (pci_cfg_read(bus, devfn, off) & !(0xFF << shift)) | ((value & 0xFF) << shift),
+        2 => (pci_cfg_read(bus, devfn, off) & !(0xFFFF << shift)) | ((value & 0xFFFF) << shift),
+        _ => value,
+    };
+    x86::outl(0xCF8, pci_cfg_addr(bus, devfn, off));
+    x86::outl(0xCFC, output);
+}
+
+#[cfg(pxe_call_probe)]
+fn pci_find(mut index: u16, matches: impl Fn(u32) -> bool) -> Option<(u8, u8)> {
+    for bus in 0..=u8::MAX {
+        for devfn in 0..=u8::MAX {
+            let id = pci_cfg_read(bus, devfn, 0);
+            if id as u16 != 0xFFFF && matches(id) {
+                if index == 0 { return Some((bus, devfn)); }
+                index -= 1;
+            }
+        }
+    }
+    None
+}
+
+#[cfg(pxe_call_probe)]
+fn pci_find_class(mut index: u16, class: u32) -> Option<(u8, u8)> {
+    for bus in 0..=u8::MAX {
+        for devfn in 0..=u8::MAX {
+            if pci_cfg_read(bus, devfn, 0) as u16 == 0xFFFF { continue; }
+            if pci_cfg_read(bus, devfn, 0x08) >> 8 == class {
+                if index == 0 { return Some((bus, devfn)); }
+                index -= 1;
+            }
+        }
+    }
+    None
+}
 
 fn is_vm86(regs: &Regs) -> bool {
     regs.mode() == arch_abi::UserMode::VM86

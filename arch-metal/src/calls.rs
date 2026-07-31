@@ -74,6 +74,21 @@ pub fn arch_user_clean() {
     }
 }
 
+/// Flush one bounded kernel-log chunk through the configured PXE/UNDI logger.
+/// Returns zero when UNDI accepts the persistent transmit buffer.
+pub fn arch_pxe_netlog_send(payload: &[u8]) -> u32 {
+    let status: u32;
+    unsafe {
+        core::arch::asm!(
+            "int 0x80",
+            inout("eax") crate::arch_call::PXE_NETLOG_SEND as u32 => status,
+            in("edx") payload.as_ptr() as u32,
+            in("ecx") payload.len() as u32,
+        );
+    }
+    status
+}
+
 
 
 /// Set page permissions for a range. flags: bit 0 = writable, bit 1 = executable.
