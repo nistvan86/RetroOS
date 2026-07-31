@@ -10,8 +10,9 @@
 //! that targets the focus-switch request, Trace the shared DOS/DPMI/Linux
 //! syscall-trace gate, Profile the profile-dump toggle, Dump the register/VGA
 //! dump, Kill the ordinary exit path (a pending flag the event loop turns into
-//! `Exit` for the focused thread, exactly as the SEGV path does). Volume is the
-//! one new knob: a runtime master gain multiplied into the single mix-out clip.
+//! `Exit` for the focused thread, exactly as the SEGV path does). Volume and
+//! HDA Output are runtime knobs: the former is master gain and the latter
+//! re-ranks the codec's discovered analog routes.
 //!
 //! State is a handful of single-threaded atomics — the same volatile-flag shape
 //! as [`thread::request_switch`]. Input handling ([`key`]) lives here but is
@@ -31,10 +32,9 @@ use crate::kernel::thread;
 const ITEM_KILL: usize = 0;
 const ITEM_SWITCH: usize = 1;
 const ITEM_VOLUME: usize = 2;
-const ITEM_TRACE: usize = 3;
-const ITEM_PROFILE: usize = 4;
-const ITEM_DUMP: usize = 5;
-const NUM_ITEMS: usize = 6;
+/// Audio backends insert their controls immediately after Volume.
+const ITEM_AUDIO_FIRST: usize = 3;
+const ITEM_TRACE_BASE: usize = ITEM_AUDIO_FIRST;
 
 /// Master volume as a percentage of unity, adjusted by ◄/► on the Volume row.
 /// 100 = unity (the level the per-source scales already balance to); attenuate
@@ -50,6 +50,23 @@ static KILL_REQ: AtomicBool = AtomicBool::new(false);
 static mut DISPLAY: Option<crate::kernel::platform::DisplayToken> = None;
 static mut NATIVE_RGB: [u32; 320 * 200] = [0; 320 * 200];
 static mut NATIVE_IDX: [u8; 320 * 200] = [0; 320 * 200];
+
+fn audio_controls() -> &'static [crate::kernel::sound::OsdControl] {
+    crate::kernel::sound::osd_controls()
+}
+
+fn item_count() -> usize {
+    // Kill, Switch, Volume; backend controls; Trace, Profile, Dump.
+    ITEM_AUDIO_FIRST + audio_controls().len() + 3
+}
+
+fn trace_item() -> usize { ITEM_TRACE_BASE + audio_controls().len() }
+fn profile_item() -> usize { trace_item() + 1 }
+fn dump_item() -> usize { trace_item() + 2 }
+
+fn audio_control_at(item: usize) -> Option<&'static crate::kernel::sound::OsdControl> {
+    item.checked_sub(ITEM_AUDIO_FIRST).and_then(|i| audio_controls().get(i))
+}
 
 /// Is the monitor panel currently open?
 pub fn is_open() -> bool {
@@ -244,7 +261,7 @@ pub fn key<A: crate::Arch>(machine: &mut A, regs: &mut Regs, sc: u8, dos: Option
     }
     match sc {
         K_F12 | K_ESC => close(),
-        K_UP => move_sel(NUM_ITEMS - 1), // -1 mod NUM_ITEMS
+        K_UP => move_sel(item_count() - 1), // -1 mod item count
         K_DOWN => move_sel(1),
         K_LEFT => adjust(false),
         K_RIGHT => adjust(true),
@@ -284,22 +301,28 @@ fn pick_select() {
 }
 
 fn move_sel(delta: usize) {
-    let sel = (SEL.load(Ordering::Relaxed) + delta) % NUM_ITEMS;
+    let sel = (SEL.load(Ordering::Relaxed) + delta) % item_count();
     SEL.store(sel, Ordering::Relaxed);
 }
 
-/// ◄/► adjust the Volume row; a no-op on every other row.
+/// ◄/► adjust the selected runtime setting; a no-op on action rows.
 fn adjust(up: bool) {
-    if SEL.load(Ordering::Relaxed) != ITEM_VOLUME {
-        return;
+    match SEL.load(Ordering::Relaxed) {
+        ITEM_VOLUME => {
+            let cur = VOL_PCT.load(Ordering::Relaxed);
+            let next = if up {
+                (cur + VOL_STEP).min(VOL_MAX)
+            } else {
+                cur.saturating_sub(VOL_STEP) // saturation is the 0 floor
+            };
+            VOL_PCT.store(next, Ordering::Relaxed);
+        }
+        _ => {
+            if let Some(control) = audio_control_at(SEL.load(Ordering::Relaxed)) {
+                (control.adjust)(up);
+            }
+        }
     }
-    let cur = VOL_PCT.load(Ordering::Relaxed);
-    let next = if up {
-        (cur + VOL_STEP).min(VOL_MAX)
-    } else {
-        cur.saturating_sub(VOL_STEP) // saturation is the 0 floor
-    };
-    VOL_PCT.store(next, Ordering::Relaxed);
 }
 
 fn activate<A: crate::Arch>(machine: &mut A, regs: &mut Regs, dos: Option<&thread::DosState<A>>) {
@@ -313,12 +336,13 @@ fn activate<A: crate::Arch>(machine: &mut A, regs: &mut Regs, dos: Option<&threa
             PICK_SEL.store(0, Ordering::Relaxed);
             PICKER.store(true, Ordering::Relaxed);
         }
-        // Volume is adjusted with ◄/►; Enter on it does nothing.
+        // Volume and backend controls are adjusted with ◄/►.
         ITEM_VOLUME => {}
         // Toggle each diagnostic and stay open so the new state shows on the row.
-        ITEM_TRACE => crate::kernel::startup::toggle_trace(),
-        ITEM_PROFILE => crate::kernel::startup::toggle_profile(),
-        ITEM_DUMP => {
+        item if audio_control_at(item).is_some() => {}
+        item if item == trace_item() => crate::kernel::startup::toggle_trace(),
+        item if item == profile_item() => crate::kernel::startup::toggle_profile(),
+        item if item == dump_item() => {
             crate::kernel::startup::dump_interrupted_thread(machine, regs, dos);
             close();
         }
@@ -357,8 +381,8 @@ pub fn paint(
         paint_picker(out, stride, w, h, logical_w, fmt);
         return;
     }
-    // Title + 6 items + footer = 8 rows.
-    let rows = NUM_ITEMS + 2;
+    // Title + menu items + footer.
+    let rows = item_count() + 2;
     let panel_w = COLS * CELL_W + PAD * 2;
     let panel_h = rows * CELL_H + PAD * 2;
     if logical_w < panel_w || h < panel_h {
@@ -383,7 +407,7 @@ pub fn paint(
     ty += CELL_H;
 
     let sel = SEL.load(Ordering::Relaxed);
-    for item in 0..NUM_ITEMS {
+    for item in 0..item_count() {
         let mut line = Line::new();
         item_line(item, &mut line);
         let selected = item == sel;
@@ -402,7 +426,7 @@ pub fn paint(
 
     vga_render::overlay_text_xscaled(
         out, stride, w, h, logical_w, tx, ty,
-        b"Up/Dn  Enter  <> vol  Esc", FOOT_FG, PANEL_BG, fmt,
+        b"Up/Dn  Enter  <> adjust  Esc", FOOT_FG, PANEL_BG, fmt,
     );
 }
 
@@ -488,7 +512,9 @@ fn proc_line(idx: usize, line: &mut Line) {
     }
 }
 
-/// Compose one menu row's text into `line`. Volume, Trace and Profile are dynamic.
+/// Compose one menu row's text into `line`. Audio-backend controls are supplied
+/// through [`sound::osd_controls`](crate::kernel::sound::osd_controls), so the
+/// monitor never needs codec-specific rows.
 fn item_line(item: usize, line: &mut Line) {
     match item {
         ITEM_KILL => line.put(b"Kill task"),
@@ -504,15 +530,25 @@ fn item_line(item: usize, line: &mut Line) {
             line.put_num(pct);
             line.put(b"%");
         }
-        ITEM_TRACE => {
+        item if audio_control_at(item).is_some() => {
+            let control = audio_control_at(item).unwrap();
+            line.put(control.label);
+            while line.len < 10 {
+                line.put(b" ");
+            }
+            line.put(b"< ");
+            line.put((control.value)());
+            line.put(b" >");
+        }
+        item if item == trace_item() => {
             line.put(b"Trace    ");
             line.put(if crate::kernel::startup::trace_enabled() { b"ON" } else { b"off" });
         }
-        ITEM_PROFILE => {
+        item if item == profile_item() => {
             line.put(b"Profile  ");
             line.put(if crate::kernel::startup::profile_enabled() { b"ON" } else { b"off" });
         }
-        ITEM_DUMP => line.put(b"Dump state"),
+        item if item == dump_item() => line.put(b"Dump state"),
         _ => {}
     }
 }

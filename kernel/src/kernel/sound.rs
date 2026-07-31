@@ -29,6 +29,25 @@ const AUDIO_LEFT: u16 = 0x532; // W: latch the left i16
 const AUDIO_RIGHT: u16 = 0x534; // W: right i16, and commit the (L,R) frame
 const SIGNATURE: u16 = 0x5241; // 'R','A' — RetroOS Audio
 
+/// A small runtime setting contributed by the active audio backend to the F12
+/// monitor. Keeping this descriptor in the sound layer means the monitor does
+/// not need to know which codec owns a particular control.
+pub struct OsdControl {
+    pub label: &'static [u8],
+    pub value: fn() -> &'static [u8],
+    pub adjust: fn(bool),
+}
+
+/// Controls offered by the selected sound backend. New codecs contribute a
+/// descriptor here; the OSD renders and routes it generically.
+pub fn osd_controls() -> &'static [OsdControl] {
+    use crate::kernel::platform::Audio;
+    match crate::kernel::platform::get().audio {
+        Audio::EmulatedHda => core::slice::from_ref(&crate::kernel::drivers::hda::OSD_OUTPUT_CONTROL),
+        _ => &[],
+    }
+}
+
 /// Source PCM wire format, as a producer presents it (the Sound Blaster DSP
 /// digital formats: 8-bit unsigned or 16-bit signed, mono or interleaved
 /// stereo). The sound layer decodes this into canonical i16 stereo.

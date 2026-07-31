@@ -150,6 +150,12 @@ pub fn arch_free_phys_contig(start_page: u64, num_pages: usize) {
     crate::phys::free_frames(start_page, num_pages);
 }
 
+/// Allocate a permanent contiguous driver region. Hosted physical memory is a
+/// sparse backing store, so the ordinary contiguous frame allocator suffices.
+pub fn arch_alloc_driver_contig(num_pages: usize) -> u64 {
+    crate::phys::alloc_frames(num_pages)
+}
+
 /// Physical page of DMA channel `ch`'s permanent ISA-DMA buffer (0 = none).
 pub fn arch_dma_channel_buf(ch: usize) -> u64 {
     unimplemented!("interp DMA channel buffer")

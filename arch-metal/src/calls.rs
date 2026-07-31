@@ -271,6 +271,20 @@ pub fn arch_dma_channel_buf(ch: usize) -> u64 {
     r as u64
 }
 
+/// Allocate permanent physically-contiguous pages from the general driver
+/// pool (PCI bus mastering; no ISA low-memory restriction).
+pub fn arch_alloc_driver_contig(num_pages: usize) -> u64 {
+    let r: u32;
+    unsafe {
+        core::arch::asm!(
+            "int 0x80",
+            inlateout("eax") crate::arch_call::ALLOC_DRIVER_CONTIG as u32 => r,
+            in("edx") num_pages as u32,
+        );
+    }
+    r as u64
+}
+
 /// Replace `count` user pages at `vpage` with fresh anonymous RW frames.
 pub fn arch_map_fresh_range(vpage: usize, count: usize) {
     unsafe {

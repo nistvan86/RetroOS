@@ -26,14 +26,14 @@
 //! then the internal analog codec later on a high PCI bus. We rank PCI HDA
 //! candidates before bring-up, then enumerate the selected codec's widget graph
 //! and choose a real output route. Pins whose default config says "not
-//! connected" are ignored; internal speakers beat headphones, headphones beat
-//! line-out, and digital-only paths are de-prioritized. This keeps QEMU's tiny
+//! connected" are ignored; accessible jacks beat fixed/internal speakers,
+//! headphones beat line-out, and digital-only paths are de-prioritized. This keeps QEMU's tiny
 //! graph working while steering an AMD/Realtek laptop toward its analog speaker
 //! codec instead of an HDMI function.
 //!
 //! ## DMA buffer placement (TEMPORARY — same stopgap as ac97)
 //!
-//! We borrow a `dma_channel_buf` (physically contiguous) and map it into kernel
+//! We allocate a general physically-contiguous PCI DMA region and map it into kernel
 //! space over the dead upper-memory slice of the low-mem identity window
 //! (`LOW_MEM_BASE + 0xC0000..`). See `ac97`'s header and memory
 //! `project_ac97_lowmem_dma_window_todo`; the proper fix is a real kernel
@@ -41,6 +41,7 @@
 //! so reusing the same window + DMA channel is safe.
 
 use core::ptr::{read_volatile, write_volatile};
+use core::sync::atomic::{AtomicU8, Ordering};
 use spin::Mutex;
 
 use crate::kernel::sound::Format;
@@ -53,10 +54,6 @@ const BAR_WIN_VA: usize = crate::LOW_MEM_BASE + 0xC_0000;
 const BAR_PAGES: usize = 4;
 /// DMA buffer window: CORB + RIRB + BDL + the PCM ring.
 const DMA_WIN_VA: usize = crate::LOW_MEM_BASE + 0xC_8000;
-/// Borrow the 16-bit ISA DMA channel's permanent contiguous buffer (128 KB / 32
-/// pages). Free on an HDA host — the SB is emulated, not passed through, so the
-/// real ISA channels are idle.
-const DMA_CHANNEL: usize = 5;
 
 // ── Controller registers (offsets into BAR0) ─────────────────────────────────
 const GCAP: usize = 0x00; // w16: bits 8..11 ISS, 12..15 OSS
@@ -171,6 +168,9 @@ const REALTEK_EAPD_COEF_INDEX: u32 = 0x10;
 const REALTEK_EAPD_COEF_MASK: u32 = 1 << 9;
 
 static HDA: Mutex<Option<Hda>> = Mutex::new(None);
+/// User-selected analog-output preference. The topology is still discovered
+/// from the codec; this merely changes how its valid paths are ranked.
+static OUTPUT_ROUTE: AtomicU8 = AtomicU8::new(OutputRoute::Auto as u8);
 /// True once the controller BAR is mapped at `BAR_WIN_VA` (panic-path guard).
 static BAR_MAPPED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 
@@ -187,6 +187,70 @@ static IRQ_LINE: core::sync::atomic::AtomicU32 =
     core::sync::atomic::AtomicU32::new(u32::MAX);
 /// Buffer-completion interrupts serviced (bring-up diagnostic for now).
 static HDA_IRQS: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+
+/// Runtime HDA output preference, selected from the F12 monitor.
+#[derive(Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum OutputRoute {
+    /// Generic codec policy: prefer accessible analog jacks.
+    Auto = 0,
+    /// Prefer fixed/internal speaker pins.
+    Speaker = 1,
+    /// Prefer a physical analog jack (line-out or a jack labelled speaker).
+    Jack = 2,
+    /// Prefer a pin explicitly labelled headphone, then any analog jack.
+    Headphone = 3,
+}
+
+impl OutputRoute {
+    const ALL: [Self; 4] = [Self::Auto, Self::Speaker, Self::Jack, Self::Headphone];
+
+    fn from_raw(raw: u8) -> Self {
+        Self::ALL.get(raw as usize).copied().unwrap_or(Self::Auto)
+    }
+
+    pub fn label(self) -> &'static [u8] {
+        match self {
+            Self::Auto => b"Auto",
+            Self::Speaker => b"Speaker",
+            Self::Jack => b"Jack",
+            Self::Headphone => b"Headphone",
+        }
+    }
+}
+
+fn output_route_label() -> &'static [u8] {
+    output_route().label()
+}
+
+/// HDA's contribution to the generic audio-controls section of the F12 OSD.
+pub static OSD_OUTPUT_CONTROL: crate::kernel::sound::OsdControl = crate::kernel::sound::OsdControl {
+    label: b"HDA Output",
+    value: output_route_label,
+    adjust: cycle_output_route,
+};
+
+/// Current output preference, for status presentation.
+pub fn output_route() -> OutputRoute {
+    OutputRoute::from_raw(OUTPUT_ROUTE.load(Ordering::Relaxed))
+}
+
+/// Cycle output preference and immediately reconfigure an already discovered
+/// codec. A missing HDA codec is harmless: the setting is retained for a
+/// later device bring-up.
+pub fn cycle_output_route(forward: bool) {
+    let current = output_route() as usize;
+    let len = OutputRoute::ALL.len();
+    let next = if forward { (current + 1) % len } else { (current + len - 1) % len };
+    let route = OutputRoute::ALL[next];
+    OUTPUT_ROUTE.store(route as u8, Ordering::Relaxed);
+
+    let mut guard = HDA.lock();
+    if let Some(dev) = guard.as_mut() {
+        dev.switch_output_route();
+    }
+    crate::println!("hda: output route {}", core::str::from_utf8(route.label()).unwrap_or("?"));
+}
 
 #[inline]
 fn spin(n: usize) {
@@ -602,8 +666,10 @@ fn bring_up<A: crate::Arch>(machine: &mut A, bus: u8, dev: u8, func: u8) -> bool
     let iss = ((gcap >> 8) & 0xF) as usize;
     let sd = SD_BASE + iss * SD_STRIDE;
 
-    // Map the borrowed contiguous DMA buffer.
-    let phys_page = machine.dma_channel_buf(DMA_CHANNEL);
+    // HDA is a PCI bus master, so allocate from the general contiguous pool;
+    // using an ISA channel buffer needlessly fails when a large linked bootfs
+    // consumes most physical memory below 16 MiB.
+    let phys_page = machine.alloc_driver_contig(DMA_PAGES);
     if phys_page == 0 {
         crate::println!("hda: {:02x}:{:02x}.{} failed: no DMA buffer", bus, dev, func);
         return false;
@@ -858,6 +924,24 @@ fn bring_up<A: crate::Arch>(machine: &mut A, bus: u8, dev: u8, func: u8) -> bool
 }
 
 impl Hda {
+    /// Account hardware playback from the authoritative cyclic DMA cursor.
+    /// Used by both the IRQ path and the position-poll fallback: some BIOSes
+    /// leave HDA INTx routing unusable even though the stream runs normally.
+    fn account_hw_progress(&mut self, completion_fallback: bool) {
+        if !self.running { return; }
+        let ring = (NUM_BUF * BUF_BYTES) as u32;
+        let pos = self.hw_cursor() % ring;
+        let raw = ((pos + ring - self.last_hw_pos) % ring) as u64;
+        let in_flight = self.emitted.saturating_sub(self.consumed_hw);
+        let delta = if raw == 0 && completion_fallback {
+            BUF_BYTES as u64
+        } else {
+            raw
+        }.min(in_flight);
+        self.consumed_hw += delta;
+        self.last_hw_pos = (self.last_hw_pos + delta as u32) % ring;
+    }
+
     fn buf_phys(&self, i: usize) -> u32 {
         self.dma_phys + (BUF_OFF + i * BUF_BYTES) as u32
     }
@@ -886,6 +970,12 @@ impl Hda {
         // Stop both engines before reprogramming their bases.
         w8(CORBCTL, 0);
         w8(RIRBCTL, 0);
+        // A prior one-shot codec transaction clears the engines but may leave
+        // RINTFL latched. On the ICH7 controller that stale status prevents
+        // the restarted RIRB from reporting its first response, making a live
+        // route switch look like an empty codec graph.
+        w8(RIRBSTS, 0x05);
+        self.verb_failed = false;
 
         let corb_phys = self.dma_phys + CORB_OFF as u32;
         w32(CORBLBASE, corb_phys);
@@ -1132,6 +1222,47 @@ impl Hda {
         true
     }
 
+    /// Re-rank and configure the codec's discovered output graph for the
+    /// current F12 preference. The PCM stream itself keeps running; only the
+    /// converter/pin binding changes, so a route audition is immediate.
+    fn switch_output_route(&mut self) {
+        if self.parked && !self.unpark() {
+            crate::println!("hda: output route change failed to unpark codec");
+            return;
+        }
+        // Playback normally stops CORB/RIRB after the format verb. Bring the
+        // command rings back just for this short topology transaction.
+        self.setup_corb_rirb();
+        let old_pin = self.pin;
+        let old_dac = self.dac;
+        if !self.select_output_path() || self.verb_failed {
+            crate::println!("hda: output route change found no usable path");
+            self.stop_corb_rirb();
+            return;
+        }
+        if old_pin != self.pin {
+            self.verb(old_pin, VERB_SET_PIN_WIDGET_CONTROL << 8); // disable old output
+        }
+        if old_dac != self.dac {
+            self.verb(old_dac, VERB_SET_CONV_STREAM_CHAN << 8); // detach old converter
+        }
+        self.configure_path();
+        if self.rate != 0 {
+            let f = Self::fmt(self.rate);
+            self.verb(self.dac, (0x2 << 16) | f as u32); // converter format
+        }
+        self.stop_corb_rirb();
+        if self.verb_failed {
+            crate::println!("hda: output route change codec verb timeout");
+        } else {
+            crate::println!(
+                "hda: output route selected pin=nid{} dac=nid{}",
+                self.pin,
+                self.dac
+            );
+        }
+    }
+
     fn enumerate_widgets(&mut self, widgets: &mut [Widget; MAX_WIDGETS]) -> usize {
         // Root node 0 → the function groups it contains.
         let root = self.verb(0, (VERB_GET_PARAMETER << 8) | PARAM_SUBNODE_COUNT);
@@ -1193,10 +1324,14 @@ impl Hda {
             count += 1;
             if DEBUG {
                 crate::println!(
-                    "hda: nid{} caps={:#x} type={}",
+                    "hda: nid{} caps={:#x} type={} pin_caps={:#x} def={:#010x} sel={} conns={:?}",
                     nid,
                     caps,
-                    (caps >> 20) & 0xF
+                    typ,
+                    pin_caps,
+                    def_cfg,
+                    conn_sel,
+                    &conns[..conn_len],
                 );
             }
         }
@@ -1671,13 +1806,42 @@ fn output_pin_score(w: &Widget) -> i32 {
     }
     let mut score = 100;
     match default_device(w.def_cfg) {
-        DEFAULT_DEVICE_SPEAKER => score += 800,
-        DEFAULT_DEVICE_HP_OUT => score += 500,
+        DEFAULT_DEVICE_SPEAKER => score += 600,
+        DEFAULT_DEVICE_HP_OUT => score += 800,
         DEFAULT_DEVICE_LINE_OUT => score += 350,
         _ => score += 100,
     }
-    if default_port(w.def_cfg) == DEFAULT_PORT_FIXED {
-        score += 80;
+    // A codec's BIOS default may call a physical green 3.5 mm jack a
+    // "speaker" (the D945GSEJT's ALC662 does). Prefer that accessible jack to
+    // a fixed internal/amplified speaker output; the latter remains the
+    // fallback when no external analog output exists.
+    if default_port(w.def_cfg) != DEFAULT_PORT_FIXED {
+        score += 300;
+    }
+    // The output setting changes ranking, not the codec graph. In particular
+    // it avoids baking a board's green-jack node number into the driver.
+    match output_route() {
+        OutputRoute::Auto => {}
+        OutputRoute::Speaker => {
+            if default_device(w.def_cfg) == DEFAULT_DEVICE_SPEAKER {
+                score += 2_000;
+            }
+            if default_port(w.def_cfg) == DEFAULT_PORT_FIXED {
+                score += 2_000;
+            }
+        }
+        OutputRoute::Jack => {
+            if default_port(w.def_cfg) != DEFAULT_PORT_FIXED {
+                score += 4_000;
+            }
+        }
+        OutputRoute::Headphone => {
+            if default_device(w.def_cfg) == DEFAULT_DEVICE_HP_OUT {
+                score += 5_000;
+            } else if default_port(w.def_cfg) != DEFAULT_PORT_FIXED {
+                score += 3_000;
+            }
+        }
     }
     let assoc = (w.def_cfg >> 4) & 0xF;
     if assoc != 0 && assoc != 0xF {
@@ -1861,27 +2025,9 @@ pub fn on_irq() -> bool {
     if status & 0x04 == 0 {
         return false;
     }
-    if dev.running {
-        let ring = (NUM_BUF * BUF_BYTES) as u32;
-        let pos = dev.hw_cursor() % ring;
-        let raw = ((pos + ring - dev.last_hw_pos) % ring) as u64;
-        // The in-flight byte count is a hard ceiling on any position delta:
-        // the codec cannot have played bytes the producer never emitted. The
-        // modular subtraction above aliases a stale/backward position read
-        // (the position buffer is a plain DMA write racing this MMIO path —
-        // and unreliable outright on some real controllers) into a
-        // near-full-ring FORWARD delta; unclamped, one such read leaps the
-        // drain clock by ~a lap, the pacer overfills the ring to the
-        // lap-ambiguity point, and the resync/drop machinery grinds audibly
-        // (stutter, echo).
-        let in_flight = dev.emitted.saturating_sub(dev.consumed_hw);
-        // A BCIS with an unchanged position can occur when the position buffer
-        // write has not become visible yet. One IOC describes at least one BDL
-        // entry, so use one buffer as the conservative fallback.
-        let delta = if raw == 0 { BUF_BYTES as u64 } else { raw }.min(in_flight);
-        dev.consumed_hw += delta;
-        dev.last_hw_pos = (dev.last_hw_pos + delta as u32) % ring;
-    }
+    // A BCIS with an unchanged cursor can race the position-buffer DMA write;
+    // one completion still represents at least one BDL entry.
+    dev.account_hw_progress(true);
     w8(dev.sd + SDSTS, status & 0x1C); // W1C BCIS/FIFOE/DESE sources
     HDA_IRQS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
     true
@@ -1907,6 +2053,10 @@ pub fn position() -> Option<(u64, u64)> {
     if dev.parked {
         return None;
     }
+    // Polling fallback for real machines whose firmware INTx route never
+    // reaches us. SDLPIB/position-buffer advancement still gives an exact
+    // playback clock, and the caller already polls this path every pump tick.
+    dev.account_hw_progress(false);
     // Metal bring-up diagnostic: `position` is polled every pump tick (~1 kHz)
     // while a session is active, so every ~2 s report whether completion
     // interrupts arrive and whether the two hardware cursors (SDLPIB, the DMA

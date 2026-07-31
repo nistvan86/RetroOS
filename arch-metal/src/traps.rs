@@ -108,6 +108,7 @@ pub mod arch_call {
     pub const HALT: u64 = 0x11F;              // cli + hlt forever at ring 0 (never returns)
     pub const PXE_NETLOG_SEND: u64 = 0x120;   // EDX=payload, ECX=len -> EAX=status
     pub const PXE_NETLOG_POLL: u64 = 0x121;   // poll UNDI; accepted RCTL reboot does not return
+    pub const ALLOC_DRIVER_CONTIG: u64 = 0x122; // EDX=num_pages -> EAX=general contiguous start page
 }
 
 static DEBUG_WATCH_COUNT: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
@@ -281,6 +282,9 @@ fn arch_dispatch(regs: &mut Regs) {
         }
         arch_call::DMA_CHANNEL_BUF => {
             regs.rax = crate::phys_mm::dma_channel_buf(regs.rdx as usize);
+        }
+        arch_call::ALLOC_DRIVER_CONTIG => {
+            regs.rax = crate::phys_mm::alloc_contig(regs.rdx as usize).unwrap_or(0);
         }
         arch_call::MAP_FRESH_RANGE => {
             paging2::map_fresh_range(regs.rdx as usize, regs.rcx as usize);

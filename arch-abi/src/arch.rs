@@ -316,6 +316,10 @@ pub trait Arch: Sized + GuestBytes {
     fn alloc_phys_contig(&mut self, num_pages: usize, boundary_log2: u32) -> u64;
     /// Free a run previously returned by `alloc_phys_contig`.
     fn free_phys_contig(&mut self, start_page: u64, num_pages: usize);
+    /// Allocate a permanent physically-contiguous run from the general
+    /// physical pool for a PCI bus-master device. Returns its starting page,
+    /// or 0 on failure. Unlike `alloc_phys_contig`, this is not ISA-limited.
+    fn alloc_driver_contig(&mut self, num_pages: usize) -> u64;
     /// Physical page of DMA channel `ch`'s permanent ISA-DMA buffer (0 = none).
     fn dma_channel_buf(&self, ch: usize) -> u64;
     /// Set a per-thread TLS GDT entry. Returns the GDT index or -1 on error.

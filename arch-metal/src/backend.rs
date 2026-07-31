@@ -116,6 +116,9 @@ impl Arch for Metal {
     fn free_phys_contig(&mut self, start_page: u64, num_pages: usize) {
         super::calls::arch_free_phys_contig(start_page, num_pages)
     }
+    fn alloc_driver_contig(&mut self, num_pages: usize) -> u64 {
+        super::calls::arch_alloc_driver_contig(num_pages)
+    }
     fn dma_channel_buf(&self, ch: usize) -> u64 { super::calls::arch_dma_channel_buf(ch) }
     fn set_tls_entry(&mut self, index: i32, base: u32, limit: u32, limit_in_pages: bool) -> i32 {
         super::calls::arch_set_tls_entry(index, base, limit, limit_in_pages)
