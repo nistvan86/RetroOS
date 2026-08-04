@@ -1213,8 +1213,9 @@ launch_86box() {
         image)        BAZEL_TARGET="//:image";              IMAGE_FILE="image.bin" ;;
         proprietary)  BAZEL_TARGET="//:image_proprietary";  IMAGE_FILE="image_proprietary.bin" ;;
         ext4)         BAZEL_TARGET="//:image_ext4";         IMAGE_FILE="image_ext4.bin" ;;
+        grubhdd)      BAZEL_TARGET="//:image_grub";         IMAGE_FILE="image_grub.bin" ;;
         freedos)      BAZEL_TARGET="//:freedos_apps" ;;
-        *)            echo "Unknown image type: $IMG (image | proprietary | ext4 | freedos)" >&2; exit 1 ;;
+        *)            echo "Unknown image type: $IMG (image | proprietary | ext4 | grubhdd | freedos)" >&2; exit 1 ;;
     esac
 
     # Emit a BIOS-friendly "spt, heads, cyl" CHS for a raw disk image.
