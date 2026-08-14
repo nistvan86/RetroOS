@@ -354,14 +354,14 @@ AudioTime::saturating_duration_since(AudioTime) -> u64
 ```bash
 bazelisk test //lib:sound_test --platforms=@platforms//host
 ```
-- [ ] Run metal and host Clippy for `//lib:sound`:
+- [x] Run metal and host Clippy for `//lib:sound`:
 
 ```bash
 bazelisk build --config=clippy //lib:sound
 bazelisk build --config=clippy --platforms=@platforms//host //lib:sound
 ```
-- [ ] Run `git diff --check`.
-- [ ] Inspect `git diff origin/master -- lib/sound` and confirm no unrelated
+- [x] Run `git diff --check`.
+- [x] Inspect `git diff origin/master -- lib/sound` and confirm no unrelated
       sound-library changes were copied.
 - [ ] Commit:
 
@@ -444,8 +444,8 @@ fn service<A: Arch>(
 
 ### 10.5 Validate and commit
 
-- [ ] Build `//kernel:kernel_elf`.
-- [ ] Run relevant host tests.
+- [x] Build `//kernel:kernel_elf`.
+- [x] Run relevant host tests.
 - [ ] Boot to DN with the normal current sound behavior unchanged.
 - [ ] Compare logs against the untouched upstream baseline.
 - [ ] Run `git diff --check`.
@@ -463,13 +463,17 @@ Use commits `b96d3b7`, `0224e82`, `43b2572`, and the sink-related portion of
 
 ### 11.1 Common sink lifecycle
 
-- [ ] Extend `sound::sink::Device` only with lifecycle operations genuinely
+- [x] Extend `sound::sink::Device` only with lifecycle operations genuinely
       required by all physical implementations.
-- [ ] Preserve stopped initialization.
-- [ ] Preserve explicit pause/reset/start sequencing.
-- [ ] Keep software written/consumed baselines synchronized with the physical
+- [x] Preserve stopped initialization.
+- [x] Preserve explicit pause/reset/start sequencing.
+- [x] Keep software written/consumed baselines synchronized with the physical
       stream reset.
-- [ ] Do not submit fake silence while claiming source time advanced.
+- [x] Do not submit fake silence while claiming source time advanced.
+
+Execution note: the upstream `Device::pause` method is given a default no-op
+implementation so existing device implementations continue to compile while
+their hardware-specific pause/reset behavior is ported in section 11.4.
 
 ### 11.2 Kernel sink state
 

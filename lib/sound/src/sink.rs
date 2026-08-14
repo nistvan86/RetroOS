@@ -14,7 +14,7 @@
 //! knowledge either: it is a ring buffer and some arithmetic.
 //!
 //! A [`Device`] is the whole of what a sound card must supply: its rate and
-//! block geometry plus start, stop and progress operations, none of which
+//! block geometry plus start, pause, reset, stop and progress operations, none of which
 //! mention a machine. Where the bytes go and how the ring is programmed are
 //! the host's; how many frames have advanced and what to do about them are this
 //! crate's.
@@ -55,10 +55,16 @@ pub trait Device {
 
     /// Program the device at [`Device::rate`], arm the transfer over the whole
     /// ring, and re-baseline the frame count.
-    /// A sink is armed once, at construction, and free-runs for its life —
-    /// there is no stopped state, because an unfed ring plays the silence it
-    /// is scrubbed to.
+    /// This is a playback transition and may be called more than once.
     fn start(&mut self);
+
+    /// Stop PCM playback while leaving the device initialized and restartable.
+    fn pause(&mut self) {}
+
+    /// Reset playback and device-side state as one restartable transition.
+    fn reset(&mut self) {
+        self.pause();
+    }
 
     /// Stop the transfer. A real session end; an idle producer does not need
     /// this, it just stops feeding.
@@ -86,6 +92,14 @@ impl<T: Device + ?Sized> Device for &mut T {
         (**self).start();
     }
 
+    fn pause(&mut self) {
+        (**self).pause();
+    }
+
+    fn reset(&mut self) {
+        (**self).reset();
+    }
+
     fn halt(&mut self) {
         (**self).halt();
     }
@@ -105,19 +119,17 @@ pub struct Sink<D: Device> {
     /// Used to distinguish an idle sink from one that ran dry while its
     /// producer was active.
     written_frames_at_last_completion: u64,
+    running: bool,
 }
 
 impl<D: Device> Sink<D> {
-    /// Arm `dev` over `buf` and start playing at the device's rate.
-    /// Constructing a sink starts it: silence is the ring's content, not a
-    /// state of the device.
-    pub fn new(buf: &'static mut [Frame], mut dev: D) -> Self {
+    /// Prepare `dev` and clear the ring without starting physical playback.
+    pub fn new(buf: &'static mut [Frame], dev: D) -> Self {
         let block_frames = dev.block_frames();
         assert!(block_frames != 0, "audio device has zero-sized blocks");
         assert!(buf.len() >= block_frames * 4, "audio device ring is too short");
         assert!(buf.len().is_multiple_of(block_frames), "audio ring is not block-aligned");
         buf.fill([0, 0]);
-        dev.start();
         Sink {
             dev,
             buf,
@@ -125,7 +137,46 @@ impl<D: Device> Sink<D> {
             written_frames: 0,
             played_frames: 0,
             written_frames_at_last_completion: 0,
+            running: false,
         }
+    }
+
+    /// Start playback after the caller has queued real audio.
+    pub fn start(&mut self) {
+        if self.running {
+            return;
+        }
+        assert!(self.written_frames != 0, "cannot start an empty audio sink");
+        self.dev.start();
+        self.running = true;
+    }
+
+    /// Stop playback and discard queued audio while retaining device ownership.
+    pub fn pause_and_reset(&mut self) {
+        if self.running {
+            self.dev.pause();
+            self.running = false;
+        }
+        self.buf.fill([0, 0]);
+        self.write_pos = 0;
+        self.written_frames = 0;
+        self.played_frames = 0;
+        self.written_frames_at_last_completion = 0;
+    }
+
+    /// Reset device-specific state together with generic sink bookkeeping.
+    pub fn reset(&mut self) {
+        self.dev.reset();
+        self.buf.fill([0, 0]);
+        self.write_pos = 0;
+        self.written_frames = 0;
+        self.played_frames = 0;
+        self.written_frames_at_last_completion = 0;
+        self.running = false;
+    }
+
+    pub fn is_running(&self) -> bool {
+        self.running
     }
 
     pub fn rate(&self) -> u32 {
@@ -183,6 +234,9 @@ impl<D: Device> Sink<D> {
 
     /// Poll the device cursor and reclaim every newly completed frame.
     pub fn poll(&mut self) -> Report {
+        if !self.running {
+            return Report::default();
+        }
         let frames = self.dev.frames_played();
         if frames == 0 {
             return Report::default();
@@ -312,9 +366,10 @@ mod tests {
             TestDevice { rate: 48_000, block_frames: BLOCK_FRAMES, starts: 0, played: 0 },
         );
         assert_eq!(sink.rate(), 48_000);
-        assert_eq!(sink.device().starts, 1);
+        assert_eq!(sink.device().starts, 0);
 
         sink.submit(&[(1, -1); 32], 1 << 16);
+        sink.start();
         assert_eq!(sink.written_frames, 32);
         assert_eq!(sink.consumed_frames(), 0);
         assert_eq!(
@@ -331,6 +386,7 @@ mod tests {
             TestDevice { rate: 8_000, block_frames: BLOCK_FRAMES, starts: 0, played: 1 },
         );
         sink.submit(&[(1, 1)], 1 << 16);
+        sink.start();
         let report = sink.poll();
         assert!(report.first_frame);
         assert_eq!(sink.consumed_frames(), 1);
@@ -351,7 +407,7 @@ mod tests {
         );
         let _ = sink.poll();
         assert_eq!(sink.block_frames(), 128);
-        assert_eq!(sink.consumed_frames(), 3);
+        assert_eq!(sink.consumed_frames(), 0);
         assert_eq!(sink.max_ahead_frames(), 1024);
         assert_eq!(sink.safety_ceiling_frames(), 2047);
     }
@@ -367,7 +423,7 @@ mod tests {
         let report = sink.poll();
         assert!(report.underrun.is_none());
         assert_eq!(sink.written_frames(), 0);
-        assert_eq!(sink.consumed_frames(), 3);
+        assert_eq!(sink.consumed_frames(), 0);
     }
 
     #[test]
@@ -378,12 +434,12 @@ mod tests {
         );
         let _ = sink.poll();
         sink.resync();
-        assert_eq!(sink.written_frames(), 3);
-        assert_eq!(sink.consumed_frames(), 3);
+        assert_eq!(sink.written_frames(), 0);
+        assert_eq!(sink.consumed_frames(), 0);
 
         sink.submit(&[(7, 7)], 1 << 16);
-        assert_eq!(sink.written_frames(), 4);
-        assert_eq!(sink.buf[3], [7, 7]);
+        assert_eq!(sink.written_frames(), 1);
+        assert_eq!(sink.buf[0], [7, 7]);
     }
 
     #[test]
