@@ -509,10 +509,14 @@ hardware cursor reset, and diagnostic counters remain pending in sections 11.2,
 
 ### 11.4 Driver changes
 
-- [ ] In HDA, reset stream descriptor and software counters together.
-- [ ] In AC97, reset channel and software counters together.
-- [ ] In SB16 sink mode, implement only required common lifecycle operations.
+- [x] In HDA, reset stream descriptor and software counters together.
+- [x] In AC97, reset channel and software counters together.
+- [x] In SB16 sink mode, implement only required common lifecycle operations.
 - [ ] Confirm ordinary native SB passthrough behavior is unchanged.
+
+Execution note: HDA route reprogramming is intentionally still on the old
+pending-route path at this point. The lifecycle methods only reset the stream;
+route caching and deferred control servicing are the next stage.
 
 ### 11.5 Validate and commit
 

@@ -224,7 +224,14 @@ impl sound::sink::Device for Ac97 {
     }
 
     fn start(&mut self) {
-        use crate::kernel::portio::{inb, outb};
+        use crate::kernel::portio::{inb, outb, outl};
+        outb(self.nabm + PO_CR, PO_CR_RESET);
+        for _ in 0..1_000_000 {
+            if inb(self.nabm + PO_CR) & PO_CR_RESET == 0 {
+                break;
+            }
+        }
+        outl(self.nabm + PO_BDBAR, self.dma_phys);
         self.last_pos_frames = 0;
         self.reported_frames = 0;
         self.played_frames = 0;
@@ -236,6 +243,19 @@ impl sound::sink::Device for Ac97 {
             NUM_BUF - 1,
             inb(self.nabm + PO_CR)
         );
+    }
+
+    fn pause(&mut self) {
+        use crate::kernel::portio::{inb, outb};
+        let cr = inb(self.nabm + PO_CR);
+        outb(self.nabm + PO_CR, cr & !PO_CR_RUN);
+    }
+
+    fn reset(&mut self) {
+        self.pause();
+        self.last_pos_frames = 0;
+        self.reported_frames = 0;
+        self.played_frames = 0;
     }
 
     fn halt(&mut self) {

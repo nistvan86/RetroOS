@@ -1732,6 +1732,16 @@ impl sound::sink::Device for Hda {
         );
     }
 
+    fn pause(&mut self) {
+        self.stop_playback();
+    }
+
+    fn reset(&mut self) {
+        self.stop_playback();
+        self.program_stream();
+        w16(self.sd + SDFMT, STREAM_FMT);
+    }
+
     fn halt(&mut self) {
         self.stop_playback();
         self.stop_corb_rirb();
