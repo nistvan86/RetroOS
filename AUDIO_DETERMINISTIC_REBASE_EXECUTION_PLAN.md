@@ -221,7 +221,30 @@ used and reuse it for all later QEMU HDA validation.
       an upstream baseline failure and ask before proceeding.
 - [ ] Confirm no build or test command changed tracked files.
 
-## 8. File Ownership Map
+## 8. Findings During Execution
+
+The first execution pass exposed these differences from the original plan:
+
+- The isolated primitive source from `b89ee1b` applied cleanly. Its timeline
+  implementation did not contain `ServiceDivider`; that divider belonged to a
+  later kernel-side commit and is therefore not being ported.
+- `origin/master` already supplies nanosecond `sound::advance()` timing and the
+  `world_now_ns`/`elapsed_ns` event-loop inputs. The new runtime is consequently
+  an orchestration boundary around that path, not a second clock or scheduler.
+- Upstream `lib/sound/src/sink.rs` still starts the device during construction
+  and has no stopped/preroll lifecycle. Sink lifecycle behavior must be ported
+  manually in the next stage; it cannot be inferred from the runtime wrapper.
+- The host kernel target requires
+  `--platforms=@platforms//host` in this repository. The execution harness was
+  corrected to use that platform explicitly; this is a test-command difference,
+  not a source change.
+- The source checkout remains untouched by implementation edits. All rework
+  edits are in `/tmp/retroos-audio-rebase` on
+  `experiment/deterministic-audio-rebase`.
+- The approved plan documents were preserved in documentation-only commits.
+  No remote branch or tag has been pushed.
+
+## 9. File Ownership Map
 
 Use this table throughout the work. Do not expand the change surface without a
 demonstrated dependency.
@@ -255,20 +278,20 @@ demonstrated dependency.
 | `kernel/src/kernel/core_bios.rs` | Keep upstream; no audio blocking calls |
 | `kernel/src/kernel/mod.rs` | Do not add `blocking` module |
 
-## 9. Stage 3: Add Nanosecond Event Primitives
+## 10. Stage 3: Add Nanosecond Event Primitives
 
 Implement this stage before changing runtime or MIDI code.
 
 ### 9.1 `AudioTime`
 
-- [ ] Create or adapt `lib/sound/src/timeline.rs`.
-- [ ] Define `AudioTime` as a monotonic nanosecond value:
+- [x] Create or adapt `lib/sound/src/timeline.rs`.
+- [x] Define `AudioTime` as a monotonic nanosecond value:
 
 ```rust
 pub struct AudioTime(u64);
 ```
 
-- [ ] Provide exactly the operations currently required by queueing and
+- [x] Provide exactly the operations currently required by queueing and
       rendering:
 
 ```rust
@@ -278,29 +301,29 @@ AudioTime::as_nanos() -> u64
 AudioTime::saturating_duration_since(AudioTime) -> u64
 ```
 
-- [ ] Keep ordering derives.
-- [ ] Do not provide `from_micros()` or `as_micros()` compatibility aliases.
+- [x] Keep ordering derives.
+- [x] Do not provide `from_micros()` or `as_micros()` compatibility aliases.
       Compile errors must identify remaining old-unit call sites.
-- [ ] Convert time to frame positions using `u128` arithmetic and division by
+- [x] Convert time to frame positions using `u128` arithmetic and division by
       `1_000_000_000`, not `1_000_000`.
-- [ ] Add tests proving:
+- [x] Add tests proving:
   - one second at 48 kHz maps to 48,000 frames;
   - 500 microseconds represented as 500,000 ns maps to 24 frames at 48 kHz;
   - saturating subtraction cannot underflow.
 
 ### 9.2 `TimedEvent<T>`
 
-- [ ] Keep `TimedEvent<T>` generic.
-- [ ] Store `at: AudioTime` and `event: T`.
-- [ ] Do not introduce a global cross-device `AudioEvent` enum.
+- [x] Keep `TimedEvent<T>` generic.
+- [x] Store `at: AudioTime` and `event: T`.
+- [x] Do not introduce a global cross-device `AudioEvent` enum.
 
 ### 9.3 `RenderMode`
 
-- [ ] Keep `RenderMode::{ProducePcm, AdvanceOnly}` as the target source
+- [x] Keep `RenderMode::{ProducePcm, AdvanceOnly}` as the target source
       contract.
-- [ ] Add a comment stating that `AdvanceOnly` means source state must actually
+- [x] Add a comment stating that `AdvanceOnly` means source state must actually
       advance while PCM is discarded.
-- [ ] Do not add a branch that simply returns without advancing state.
+- [x] Do not add a branch that simply returns without advancing state.
 - [ ] If the reduced runtime cannot yet execute `AdvanceOnly`, leave the mode
       at the interface boundary and return a clearly named unsupported path
       only in code that is unreachable in this PoC. Prefer not calling the mode
@@ -308,9 +331,9 @@ AudioTime::saturating_duration_since(AudioTime) -> u64
 
 ### 9.4 Fixed event queue
 
-- [ ] Port `lib/sound/src/event_queue.rs` from commit `b89ee1b` and follow-up
+- [x] Port `lib/sound/src/event_queue.rs` from commit `b89ee1b` and follow-up
       `2ba7d6a`, manually rather than by cherry-picking.
-- [ ] Preserve:
+- [x] Preserve:
   - fixed capacity;
   - FIFO order;
   - equal-timestamp insertion order;
@@ -319,13 +342,13 @@ AudioTime::saturating_duration_since(AudioTime) -> u64
   - high-water counter;
   - `new_boxed()` to avoid materializing a large queue on the kernel stack;
   - correct `Drop` for initialized entries.
-- [ ] Preserve `pop_through(time)` semantics: events at exactly `time` are due.
-- [ ] Keep the `N == 0` behavior safe.
-- [ ] Update all tests to nanoseconds.
+- [x] Preserve `pop_through(time)` semantics: events at exactly `time` are due.
+- [x] Keep the `N == 0` behavior safe.
+- [x] Update all tests to nanoseconds.
 
 ### 9.5 Validate and commit
 
-- [ ] Export the retained modules from `lib/sound/src/lib.rs`.
+- [x] Export the retained modules from `lib/sound/src/lib.rs`.
 - [ ] Run:
 
 ```bash
@@ -346,14 +369,14 @@ bazelisk build --config=clippy --platforms=@platforms//host //lib:sound
 refactor(audio): add nanosecond event primitives
 ```
 
-## 10. Stage 4: Introduce the Reduced Source-Neutral Runtime
+## 11. Stage 4: Introduce the Reduced Source-Neutral Runtime
 
 The purpose of this stage is to preserve the long-term architecture, not the
 old runtime implementation.
 
 ### 10.1 Runtime ownership
 
-- [ ] Add a reduced `AudioRuntime` in `kernel/src/kernel/sound.rs`.
+- [x] Add a reduced `AudioRuntime` in `kernel/src/kernel/sound.rs`.
 - [ ] It may own:
   - `Clock`;
   - `Option<Sink>`;
@@ -368,7 +391,7 @@ old runtime implementation.
 
 ### 10.2 Service API
 
-- [ ] Give the runtime a service method that receives time from upstream. Use a
+- [x] Give the runtime a service method that receives time from upstream. Use a
       signature equivalent to:
 
 ```rust
@@ -381,28 +404,28 @@ fn service<A: Arch>(
 )
 ```
 
-- [ ] Do not call `machine.now()` inside this method to calculate elapsed time.
+- [x] Do not call `machine.now()` inside this method to calculate elapsed time.
       The upstream event loop already supplies the authoritative interval.
-- [ ] Keep `now` available to source rendering for event boundaries.
-- [ ] Route ordinary PCM production through upstream's nanosecond-native
+- [x] Keep `now` available to source rendering for event boundaries.
+- [x] Route ordinary PCM production through upstream's nanosecond-native
       `sound::advance()` implementation.
-- [ ] Do not copy the old `AudioTimeline::elapsed_micros()` method.
-- [ ] Do not copy `fractional_micros`.
+- [x] Do not copy the old `AudioTimeline::elapsed_micros()` method.
+- [x] Do not copy `fractional_micros`.
 - [ ] Do not copy `SchedulerCensus` unless a currently used test requires a
       specific counter. Prefer upstream tracing.
 
 ### 10.3 Source boundary
 
-- [ ] Retain `AudioSpan`.
+- [x] Retain `AudioSpan`.
 - [ ] Retain a source-neutral render boundary. It may be a trait or the existing
       personality callback, but it must support a future DOS aggregate source.
-- [ ] Do not add dynamic source registration.
-- [ ] Do not add separate runtime knowledge of MIDI, OPL, SB, or GUS.
+- [x] Do not add dynamic source registration.
+- [x] Do not add separate runtime knowledge of MIDI, OPL, SB, or GUS.
 - [ ] Do not implement a no-op `AdvanceOnly` service path.
 
 ### 10.4 Event-loop wiring
 
-- [ ] Begin from upstream `kernel/src/kernel/startup.rs`.
+- [x] Begin from upstream `kernel/src/kernel/startup.rs`.
 - [ ] Preserve:
   - `last_world_ns`;
   - `irq_clock_wakeup`;
@@ -410,14 +433,14 @@ fn service<A: Arch>(
   - `world_now_ns = machine.now()` only when the backend wakeup permits it;
   - `elapsed_ns = world_now_ns - last_world_ns`;
   - upstream order of world, audio, display, and input advancement.
-- [ ] Replace local `audio_clock` and `sink` ownership with `AudioRuntime` only
+- [x] Replace local `audio_clock` and `sink` ownership with `AudioRuntime` only
       to the extent required by the runtime boundary.
-- [ ] Invoke runtime service only when upstream would have invoked
+- [x] Invoke runtime service only when upstream would have invoked
       `sound::advance()`.
-- [ ] Pass `AudioTime::from_nanos(world_now_ns)` and `elapsed_ns`.
-- [ ] Keep the personality's audio callback as the source aggregate boundary.
-- [ ] Do not add a second service cadence.
-- [ ] Do not install a blocking-operation hook.
+- [x] Pass `AudioTime::from_nanos(world_now_ns)` and `elapsed_ns`.
+- [x] Keep the personality's audio callback as the source aggregate boundary.
+- [x] Do not add a second service cadence.
+- [x] Do not install a blocking-operation hook.
 
 ### 10.5 Validate and commit
 
