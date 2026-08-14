@@ -248,6 +248,12 @@ The first execution pass exposed these differences from the original plan:
   Clippy because untouched upstream `arch-metal/src/irq.rs` violates
   `clippy::precedence` and `clippy::deref_addrof`; these are not rebase files
   and are recorded as baseline failures rather than fixed here.
+- The bounded QEMU HDA/Doom run reaches DOS, MPU initialization, HDA
+  initialization, real-audio preroll, playback start, and first-frame
+  consumption, and the 45-second timeout terminates QEMU correctly. It also
+  exposes an incomplete result: QEMU repeatedly reports underruns and
+  re-primes the sink (about 120 recoveries in 45 seconds), so steady-state
+  acceptance remains unchecked until this behavior is understood.
 - The validation harness initially used `rg -E`, which this `rg` interprets as
   an encoding option. The check was corrected to use `rg --regexp`.
 
