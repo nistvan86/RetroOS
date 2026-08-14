@@ -477,12 +477,12 @@ their hardware-specific pause/reset behavior is ported in section 11.4.
 
 ### 11.2 Kernel sink state
 
-- [ ] Introduce `PlaybackState::{PreRoll, Running}`.
-- [ ] On construction, leave the physical device stopped.
-- [ ] Set preroll target from the configured OSD latency, clamped to at least
+- [x] Introduce `PlaybackState::{PreRoll, Running}`.
+- [x] On construction, leave the physical device stopped.
+- [x] Set preroll target from the configured OSD latency, clamped to at least
       one hardware block and at most the safe device lead.
-- [ ] Mix and submit real source PCM while stopped.
-- [ ] Start the physical stream only after queued real PCM reaches the target.
+- [x] Mix and submit real source PCM while stopped.
+- [x] Start the physical stream only after queued real PCM reaches the target.
 - [ ] On real underrun or requested reset:
   - pause/reset the device;
   - reset software cursor baselines;
@@ -495,12 +495,17 @@ their hardware-specific pause/reset behavior is ported in section 11.4.
 
 ### 11.3 Delayed service
 
-- [ ] Preserve upstream's finite-ring safety check.
-- [ ] Do not render an arbitrarily large delayed interval into the DMA ring.
-- [ ] Do not interpret a long elapsed interval by itself as proof of a physical
+- [x] Preserve upstream's finite-ring safety check.
+- [x] Do not render an arbitrarily large delayed interval into the DMA ring.
+- [x] Do not interpret a long elapsed interval by itself as proof of a physical
       underrun.
-- [ ] Keep source-state deadline advancement as an explicit future
+- [x] Keep source-state deadline advancement as an explicit future
       `AdvanceOnly` responsibility; do not fake it by returning from the source.
+
+Execution note: the kernel sink now has stopped construction, latency-derived
+real-audio preroll, and a restartable underrun path. Requested-reset handling,
+hardware cursor reset, and diagnostic counters remain pending in sections 11.2,
+11.4, and 11.5.
 
 ### 11.4 Driver changes
 

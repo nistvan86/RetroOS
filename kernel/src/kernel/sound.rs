@@ -96,6 +96,15 @@ pub struct Sink {
     ns_since_cursor: u64,
     rate_q16: Option<u64>,
     census: Census,
+    playback: PlaybackState,
+    preroll_frames: u64,
+    recoveries: u64,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PlaybackState {
+    PreRoll,
+    Running,
 }
 
 impl Sink {
@@ -137,6 +146,11 @@ impl Sink {
         let (buf, device) = selected?;
         let inner = sound::sink::Sink::new(buf, device);
         let rate = inner.rate();
+        let preroll_frames = (u64::from(rate)
+            * u64::from(crate::kernel::osd::audio_latency_ms()))
+            .div_ceil(1000)
+            .max(inner.block_frames() as u64)
+            .min(inner.max_ahead_frames());
         Some(Sink {
             inner,
             producer: sound::Pacer::new(rate),
@@ -144,12 +158,27 @@ impl Sink {
             ns_since_cursor: 0,
             rate_q16: None,
             census: Census::default(),
+            playback: PlaybackState::PreRoll,
+            preroll_frames,
+            recoveries: 0,
         })
     }
 
     /// Stream a block of wide mixed PCM, applying the final Q16 output gain.
     fn play(&mut self, frames: &[(i32, i32)], gain_q16: i32) {
         self.inner.submit(frames, gain_q16);
+        if self.playback == PlaybackState::PreRoll
+            && self.inner.written_frames().saturating_sub(self.inner.consumed_frames())
+                >= self.preroll_frames
+        {
+            self.inner.start();
+            self.playback = PlaybackState::Running;
+            crate::println!(
+                "sound: playback start queued={} preroll_frames={}",
+                self.inner.written_frames().saturating_sub(self.inner.consumed_frames()),
+                self.preroll_frames,
+            );
+        }
     }
 
     fn poll(&mut self) -> sound::sink::Report {
@@ -158,7 +187,13 @@ impl Sink {
 
     /// Re-anchor the physical pipe after the device overtook its producer.
     fn recover_from_underrun(&mut self) {
-        self.inner.resync();
+        self.inner.pause_and_reset();
+        self.producer = sound::Pacer::new(self.inner.rate());
+        self.last_consumed = 0;
+        self.ns_since_cursor = 0;
+        self.rate_q16 = None;
+        self.playback = PlaybackState::PreRoll;
+        self.recoveries = self.recoveries.saturating_add(1);
     }
 }
 
