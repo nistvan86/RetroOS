@@ -250,6 +250,8 @@ pub struct PcMachine {
     /// no configuration for — and driven entirely by the port dispatch above:
     /// PIT channel 2's reload for pitch, port 61h bits 0-1 for the gate.
     pub spk: sound::speaker::Speaker,
+    /// Validation-only source policy for deterministic MIDI testing.
+    pub midi_only_audio: bool,
     /// Last value written to CMOS index port 0x70 (NMI bit masked off).
     /// Reads of port 0x71 pass through to the host CMOS using this index.
     pub cmos_index: u8,
@@ -577,6 +579,7 @@ impl PcMachine {
             core::ptr::addr_of_mut!((*p).gus).write(Gus::new());
             core::ptr::addr_of_mut!((*p).mpu).write(Mpu::new());
             core::ptr::addr_of_mut!((*p).spk).write(sound::speaker::Speaker::new());
+            core::ptr::addr_of_mut!((*p).midi_only_audio).write(false);
             core::ptr::addr_of_mut!((*p).cmos_index).write(0);
             core::ptr::addr_of_mut!((*p).native_vbe_io_rmcs).write(0);
             core::ptr::addr_of_mut!((*p).locked_stack)
@@ -868,7 +871,8 @@ pub fn emulate_outb<A: crate::Arch>(machine: &mut A, pc: &mut PcMachine, regs: &
         // Gravis UltraSound (GF1) — exists only when ULTRASND declared it.
         p if pc.gus.owns(p) => pc.gus.io_write(machine, &pc.dma, p, val),
         // MPU-401 / General MIDI — exists only when BLASTER declared P<port>.
-        p if emulated_mpu(pc, p) => pc.mpu.io_write(p, val),
+        p if emulated_mpu(pc, p) => pc.mpu.io_write(
+            p, val, sound::timeline::AudioTime::from_nanos(machine.now())),
         // Virtual 8237 DMA controller (generic). After capturing the
         // write, re-check whether the BLASTER channel just armed and, if
         // so, remap the guest buffer contiguous + program the real 8237.
@@ -1203,6 +1207,7 @@ pub fn advance_timers(pc: &mut PcMachine, now_ns: u64) {
 /// buffer, but its clock is always the CPU-clocked production
 /// frontier; the final speaker sink trails it by the physical pipe depth.
 enum PcmSource<'a> {
+    Silent,
     /// `None` when this thread holds the real card: silicon mixes itself, and
     /// there is no emulated card to ask for frames.
     SoundBlaster(Option<&'a mut EmulatedSb>),
@@ -1211,19 +1216,28 @@ enum PcmSource<'a> {
     Speaker(&'a mut sound::speaker::Speaker),
 }
 
-impl PcmSource<'_> {
-    fn mix_into<A: crate::Arch>(
+impl<A: crate::Arch> crate::kernel::sound::AudioSource<A> for PcmSource<'_> {
+    fn render(
         &mut self,
         machine: &mut A,
-        rate: u32,
-        base: u64,
-        block: &mut [(i32, i32)],
+        mode: sound::timeline::RenderMode,
+        span: crate::kernel::sound::AudioSpan<'_>,
     ) {
+        if mode == sound::timeline::RenderMode::AdvanceOnly {
+            return;
+        }
+        let rate = span.rate;
+        let base = span.base_frame;
+        let block = span.frames;
         match self {
+            Self::Silent => {}
             Self::SoundBlaster(Some(sb)) => sb.mix_into(machine, rate, block),
             Self::SoundBlaster(None) => {}
             Self::Gus(gus) => gus.mix_into(machine, rate, base, block),
-            Self::Midi(mpu) => mpu.mix_into(machine, rate, base, block),
+            Self::Midi(mpu) => {
+                mpu.service(machine, base);
+                mpu.mix_into(machine, rate, base, block);
+            }
             Self::Speaker(spk) => {
                 let g = vsb::SPEAKER_SCALE_Q16;
                 spk.mix_into(rate, (g, g), block)
@@ -1255,9 +1269,9 @@ pub fn audio_service<A: crate::Arch>(
     pc: &mut PcMachine,
     now_ns: u64,
     dt_ns: u64,
-    pushed: u64,
+    _pushed: u64,
 ) {
-    let PcMachine { sb, gus, mpu, vpic, .. } = pc;
+    let PcMachine { sb, gus, vpic, .. } = pc;
     let prof = crate::kernel::startup::profile_enabled();
     let t0 = if prof { machine.rdtsc() } else { 0 };
     // Latched probe/trigger IRQs are the emulated card's business: a real one
@@ -1272,7 +1286,6 @@ pub fn audio_service<A: crate::Arch>(
         gus.advance(dt_ns, vpic);
     }
     let t2 = if prof { machine.rdtsc() } else { 0 };
-    mpu.tick(machine, pushed);
     if prof {
         let t3 = machine.rdtsc();
         crate::kernel::startup::bill_audio_service(
@@ -1287,6 +1300,7 @@ pub fn audio_tick<A: crate::Arch>(
     now_ns: u64,
     span: crate::kernel::sound::AudioSpan<'_>,
 ) {
+    let midi_only_audio = pc.midi_only_audio;
     let PcMachine { sb, gus, mpu, spk, vpic, .. } = pc;
     // The source clock advances emulated sources only. A thread holding the real card
     // has nothing here: its DSP streams from the guest ring over the ISA bus
@@ -1302,17 +1316,35 @@ pub fn audio_tick<A: crate::Arch>(
     if let Some(emu) = sb.as_deref_mut() {
         let _ = emu.take_restart();
     }
-    let mut sources = [
-        PcmSource::SoundBlaster(sb.as_deref_mut()),
-        PcmSource::Gus(gus),
-        PcmSource::Midi(mpu),
-        PcmSource::Speaker(spk),
-    ];
+    let mut sources = if midi_only_audio {
+        [
+            PcmSource::Silent,
+            PcmSource::Silent,
+            PcmSource::Midi(mpu),
+            PcmSource::Silent,
+        ]
+    } else {
+        [
+            PcmSource::SoundBlaster(sb.as_deref_mut()),
+            PcmSource::Gus(gus),
+            PcmSource::Midi(mpu),
+            PcmSource::Speaker(spk),
+        ]
+    };
     let prof = crate::kernel::startup::profile_enabled();
     let mut source_cycles = [0u64; 4];
     for (i, source) in sources.iter_mut().enumerate() {
         let t0 = if prof { machine.rdtsc() } else { 0 };
-        source.mix_into(machine, span.rate, span.base_frame, span.frames);
+        crate::kernel::sound::AudioSource::render(
+            source,
+            machine,
+            sound::timeline::RenderMode::ProducePcm,
+            crate::kernel::sound::AudioSpan {
+                rate: span.rate,
+                base_frame: span.base_frame,
+                frames: span.frames,
+            },
+        );
         if prof {
             source_cycles[i] = machine.rdtsc().wrapping_sub(t0);
         }

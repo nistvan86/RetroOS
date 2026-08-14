@@ -26,6 +26,14 @@ impl<T, const N: usize> FixedEventQueue<T, N> {
         }
     }
 
+    pub fn new_boxed() -> alloc::boxed::Box<Self> {
+        alloc::boxed::Box::new(Self::new())
+    }
+
+    pub fn clear(&mut self) {
+        while self.pop().is_some() {}
+    }
+
     pub const fn capacity(&self) -> usize { N }
 
     pub const fn is_empty(&self) -> bool { self.len == 0 }
@@ -100,7 +108,7 @@ mod tests {
     #[test]
     fn fifo_and_equal_timestamp_order_are_preserved() {
         let mut q: FixedEventQueue<TimedEvent<u8>, 4> = FixedEventQueue::new();
-        let at = AudioTime::from_micros(10);
+        let at = AudioTime::from_nanos(10_000);
         for value in [0x90, 0x3C, 0x7F, 0xFF] {
             q.push(TimedEvent { at, event: value }).unwrap();
         }

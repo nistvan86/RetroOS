@@ -11,15 +11,38 @@
 
 use super::*;
 
+const MPU_EVENT_QUEUE: usize = 4096;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MpuEvent {
+    DataWrite(u8),
+    CommandWrite(u8),
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct MpuStats {
+    pub queue_depth: usize,
+    pub queue_high_water: usize,
+    pub queue_overflows: u64,
+    pub data_writes: u64,
+    pub command_writes: u64,
+    pub events_consumed: u64,
+    pub midi_bytes_accepted: u64,
+    pub midi_bytes_ignored: u64,
+    pub max_event_age_ns: u64,
+    pub frames_rendered: u64,
+}
+
 pub struct Mpu {
     /// `BLASTER=... P<port>` declared an MPU-401. Absent hardware stays
     /// absent: `owns` gates on this, so probes read floating.
     pub present: bool,
     pub base: u16,
     card: sound::mpu401::Mpu401,
-    /// Built on first use — the synth carries 32 voices and the MIDI wire
-    /// state; a program that never opens the port pays nothing. Instruments
-    /// come from the boot ROM by reference.
+    events: alloc::boxed::Box<sound::event_queue::FixedEventQueue<
+        sound::timeline::TimedEvent<MpuEvent>, MPU_EVENT_QUEUE>>,
+    replay_uart: bool,
+    rate: u32,
     synth: Option<alloc::boxed::Box<sound::midi::Synth>>,
     /// The ROM in the socket, handed in with the rest of this program's
     /// wiring (see [`Mpu::configure_from_env`]). A device does not go
@@ -27,6 +50,7 @@ pub struct Mpu {
     /// owns boot assets, and arrives here as a value like the port number
     /// does. `None` is an empty socket — the port still answers, silently.
     bank: Option<&'static sound::midi::Bank>,
+    stats: MpuStats,
 }
 
 impl Mpu {
@@ -35,8 +59,12 @@ impl Mpu {
             present: false,
             base: 0x330,
             card: sound::mpu401::Mpu401::new(0x330),
+            events: sound::event_queue::FixedEventQueue::new_boxed(),
+            replay_uart: false,
+            rate: 44_100,
             synth: None,
             bank: None,
+            stats: MpuStats::default(),
         }
     }
 
@@ -57,6 +85,11 @@ impl Mpu {
     /// `P<port>` token (our CONFIG.SYS ships `P330`).
     pub fn configure_from_env(&mut self, env: &[u8], bank: Option<&'static sound::midi::Bank>) {
         self.bank = bank;
+        if self.synth.is_none() && let Some(bank) = self.bank {
+            let mut synth = sound::midi::Synth::new_boxed(bank);
+            synth.init();
+            self.synth = Some(synth);
+        }
         let Some(blaster) = env_var(env, b"BLASTER") else { return };
         for tok in blaster.split(|&b| b == b' ').filter(|t| !t.is_empty()) {
             if tok[0].eq_ignore_ascii_case(&b'P')
@@ -76,42 +109,69 @@ impl Mpu {
     /// program starts from a power-on device. The ROM, being ROM, stays.
     pub fn reset(&mut self) {
         self.card.reset();
+        self.events.clear();
+        self.replay_uart = false;
+        self.rate = 44_100;
         self.synth = None;
         self.present = false;
+    }
+
+    pub fn stats(&self) -> MpuStats {
+        MpuStats {
+            queue_depth: self.events.len(),
+            queue_high_water: self.events.high_water(),
+            queue_overflows: self.events.overflows(),
+            ..self.stats
+        }
     }
 
     pub fn io_read(&mut self, p: u16) -> u8 {
         self.card.port_in(p)
     }
 
-    pub fn io_write(&mut self, p: u16, val: u8) {
+    pub fn io_write(&mut self, p: u16, val: u8, at: sound::timeline::AudioTime) {
         self.card.port_out(p, val);
+        let event = if p == self.base {
+            self.stats.data_writes += 1;
+            MpuEvent::DataWrite(val)
+        } else {
+            self.stats.command_writes += 1;
+            MpuEvent::CommandWrite(val)
+        };
+        if self.events.push(sound::timeline::TimedEvent { at, event }).is_err() {
+            crate::dbg_println!("audio: MPU event queue overflow");
+        }
     }
 
     /// Per-quantum service: drain the port's MIDI bytes into the synth.
     /// `arrival_frame` is the mix-frame the bytes arrived at — the synth
     /// applies each at that frame.
-    pub fn tick<A: crate::Arch>(&mut self, machine: &mut A, arrival_frame: u64) {
-        let _ = machine;
+    pub fn service<A: crate::Arch>(&mut self, machine: &mut A, arrival_frame: u64) {
         if !self.present {
             return;
         }
-        // Only build the synth once the guest actually drives the port —
-        // detection alone (reset/ACK) must not cost the voice engine. A
-        // bankless boot never builds one: the wire still ACKs (the port
-        // exists), but there is nothing to sound.
-        if self.synth.is_none() {
-            if !self.card.in_uart() {
-                return;
-            }
-            let Some(bank) = self.bank else { return };
-            let mut s = sound::midi::Synth::new_boxed(bank);
-            s.init();
-            self.synth = Some(s);
-        }
-        while let Some(b) = self.card.take() {
-            if let Some(s) = self.synth.as_mut() {
-                s.write_at(arrival_frame, b);
+        let now = sound::timeline::AudioTime::from_nanos(machine.now());
+        while let Some(timed) = self.events.pop_through(now) {
+            self.stats.events_consumed += 1;
+            self.stats.max_event_age_ns = self.stats.max_event_age_ns.max(
+                now.saturating_duration_since(timed.at),
+            );
+            match timed.event {
+                MpuEvent::CommandWrite(0xFF) => self.replay_uart = false,
+                MpuEvent::CommandWrite(0x3F) => self.replay_uart = true,
+                MpuEvent::CommandWrite(_) => {}
+                MpuEvent::DataWrite(b) if self.replay_uart => {
+                    self.stats.midi_bytes_accepted += 1;
+                    let elapsed = now.saturating_duration_since(timed.at);
+                    let late_frames = elapsed.saturating_mul(u64::from(self.rate)) / 1_000_000_000;
+                    let frame = arrival_frame.saturating_sub(late_frames);
+                    if let Some(s) = self.synth.as_mut() {
+                        s.write_at(frame, b);
+                    }
+                }
+                MpuEvent::DataWrite(_) => {
+                    self.stats.midi_bytes_ignored += 1;
+                }
             }
         }
     }
@@ -129,6 +189,9 @@ impl Mpu {
     ) {
         let g = super::vsb::GM_SCALE_Q16;
         if let Some(s) = self.synth.as_mut() {
+            self.rate = rate;
+            self.stats.frames_rendered = self.stats.frames_rendered
+                .saturating_add(block.len() as u64);
             s.mix_into(rate, base, (g, g), block);
         }
     }

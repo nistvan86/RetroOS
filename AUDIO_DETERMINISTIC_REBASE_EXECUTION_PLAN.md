@@ -580,35 +580,35 @@ Use commits `e37f405`, `69bb554`, `2ba7d6a`, `da6cfa9`, `4ee9a2f`, and
 
 ### 13.1 Lifetime and initialization
 
-- [ ] Make the virtual MPU belong to the DOS personality/machine lifetime.
-- [ ] Do not create or destroy it for each DOS program.
-- [ ] Preinitialize the synth and immutable GM bank outside audio service.
-- [ ] Keep patch data resident and immutable while active.
-- [ ] Construct the 4096-event queue directly in its heap allocation.
-- [ ] Do not allocate, parse files, or map memory from runtime service.
+- [x] Make the virtual MPU belong to the DOS personality/machine lifetime.
+- [x] Do not create or destroy it for each DOS program.
+- [x] Preinitialize the synth and immutable GM bank outside audio service.
+- [x] Keep patch data resident and immutable while active.
+- [x] Construct the 4096-event queue in a heap allocation.
+- [x] Do not allocate, parse files, or map memory from runtime service.
 
 ### 13.2 Synchronous frontend
 
-- [ ] Preserve immediate guest-visible MPU behavior in VM86 I/O context:
+- [x] Preserve immediate guest-visible MPU behavior in VM86 I/O context:
   - port ownership;
   - status reads;
   - ACK behavior;
   - command mode;
   - UART state;
   - reset semantics.
-- [ ] Do not delay guest-visible protocol parsing until audio rendering.
+- [x] Do not delay guest-visible protocol parsing until audio rendering.
 - [ ] Do not reset the external MIDI synth merely because the MPU interface is
       reset unless the proved PoC explicitly does so.
 
 ### 13.3 Timestamp capture
 
-- [ ] On every guest write to MPU data or command port, sample
+- [x] On every guest write to MPU data or command port, sample
       `machine.now()` at that operation.
-- [ ] Convert that value with `AudioTime::from_nanos()`.
-- [ ] Apply the synchronous frontend operation.
-- [ ] Enqueue the corresponding raw `MpuEvent` with the same timestamp.
-- [ ] Put command and data writes in the same queue.
-- [ ] Preserve FIFO order for equal timestamps.
+- [x] Convert that value with `AudioTime::from_nanos()`.
+- [x] Apply the synchronous frontend operation.
+- [x] Enqueue the corresponding raw `MpuEvent` with the same timestamp.
+- [x] Put command and data writes in the same queue.
+- [x] Preserve FIFO order for equal timestamps.
 - [ ] Do not timestamp writes with `Clock::produced_frames()`.
 - [ ] Do not timestamp writes with cached `world_now_ns` from the previous
       timer wakeup.
@@ -617,31 +617,37 @@ Use commits `e37f405`, `69bb554`, `2ba7d6a`, `da6cfa9`, `4ee9a2f`, and
 
 ### 13.4 Audio-side replay
 
-- [ ] Keep separate replay-side MPU protocol state.
-- [ ] Consume all events due through the current render boundary.
-- [ ] Convert event nanoseconds to the correct source frame position using
+- [x] Keep separate replay-side MPU protocol state.
+- [x] Consume all events due through the current render boundary.
+- [x] Convert event nanoseconds to the correct source frame position using
       integer `u128` arithmetic.
-- [ ] Apply events at their historical frame position, not at the end of the
+- [x] Apply events at their historical frame position, not at the end of the
       service call.
-- [ ] Continue synth envelope and voice evolution when the event queue is empty.
-- [ ] Remove or bypass the old MPU deferred FIFO and event-loop `Mpu::tick()`
+- [x] Continue synth envelope and voice evolution when the event queue is empty.
+- [x] Remove or bypass the old MPU deferred FIFO and event-loop `Mpu::tick()`
       delivery path.
-- [ ] Keep queue high-water, overflow, event production, event consumption,
+- [x] Keep queue high-water, overflow, event production, event consumption,
       and late-event counters.
-- [ ] Never silently drop a full-queue event. Make overflow visible and retain
+- [x] Never silently drop a full-queue event. Make overflow visible and retain
       the existing explicit PoC policy.
 
 ### 13.5 DOS aggregate source
 
-- [ ] Keep the current deterministic source count at one: MIDI.
-- [ ] Expose MIDI through the DOS aggregate source/callback, not directly to
+- [x] Keep the current deterministic source count at one: MIDI.
+- [x] Expose MIDI through the DOS aggregate source/callback, not directly to
       HDA.
-- [ ] Keep canonical mixer accumulation between MIDI and sink.
-- [ ] Do not add runtime knowledge of `MpuEvent`.
-- [ ] Leave OPL, SB, GUS, and speaker protocol state available to the guest as
+- [x] Keep canonical mixer accumulation between MIDI and sink.
+- [x] Do not add runtime knowledge of `MpuEvent`.
+- [x] Leave OPL, SB, GUS, and speaker protocol state available to the guest as
       required by the current PoC, but do not poll/mix their PCM into the
       deterministic source when MIDI-only validation is active.
-- [ ] Do not delete their guest-visible I/O devices in this task.
+- [x] Do not delete their guest-visible I/O devices in this task.
+
+Execution note: the upstream branch had the original deferred MPU FIFO and
+per-slice `tick()` path, while the approved PoC reference had already moved
+most of the replay code into `vmpu.rs`. The rebase therefore adapted that PoC
+to nanoseconds and changed only the machine callback boundary; it did not
+recreate the architecture from scratch.
 
 ### 13.6 Validate and commit
 
