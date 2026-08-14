@@ -247,13 +247,15 @@ pub fn startup<A: crate::Arch>(machine: &mut A, boot: &crate::BootConfig) -> ! {
     }
     // Take the selected output capability into runtime ownership. `None` is a
     // silent runtime, not a dummy sink.
-    let sink = crate::kernel::sound::Sink::new(machine, audio, for_sink);
+    let audio_runtime = crate::kernel::sound::AudioRuntime::new(
+        crate::kernel::sound::Sink::new(machine, audio, for_sink),
+    );
     init_console_pipe();
 
     // DOS worlds are cloned from their substitute-BIOS template.
     let mut dos_template = crate::kernel::dos::DosTemplate::new(machine);
 
-    run(machine, boot, &master_env, &mut bios_workspace, &mut dos_template, &mut threads, screen, sb_card, sink)
+    run(machine, boot, &master_env, &mut bios_workspace, &mut dos_template, &mut threads, screen, sb_card, audio_runtime)
 }
 
 /// The host filesystem (COM1 transport). Mounted at /host beside a disk
@@ -495,7 +497,7 @@ fn run<A: crate::Arch>(
     threads: &mut [thread::Thread<A>],
     mut screen: crate::kernel::console::Console,
     mut sb: Option<crate::kernel::drivers::sb16::SbCard>,
-    mut sink: Option<crate::kernel::sound::Sink>,
+    mut audio_runtime: crate::kernel::sound::AudioRuntime,
 ) -> ! {
     // What to run headlessly, from whichever channel the backend has. QEMU and
     // the hosted interpreter pass a cmdline through `opt/cmdline`; 86Box and
@@ -536,7 +538,7 @@ fn run<A: crate::Arch>(
                 core::str::from_utf8(cwd).unwrap_or("?"));
             (screen, sb) = run_program_with_screen(
                 machine, bios_workspace, dos_template, threads, path, tail, cwd, master_env, boot.debug_watch,
-                screen, sb, sink.as_mut(),
+                screen, sb, &mut audio_runtime,
             );
         }
         crate::screenln!(screen, "All commands done — shutting down.");
@@ -557,7 +559,7 @@ fn run<A: crate::Arch>(
     loop {
         (screen, sb) = run_program_with_screen(
             machine, bios_workspace, dos_template, threads, &dn_path, b"", b"", master_env, boot.debug_watch,
-            screen, sb, sink.as_mut(),
+            screen, sb, &mut audio_runtime,
         );
         crate::screenln!(screen, "DN exited, restarting...");
     }
@@ -576,12 +578,12 @@ fn run_program_with_screen<A: crate::Arch>(
     debug_watch: Option<(u32, u32)>,
     screen: crate::kernel::console::Console,
     sb: Option<crate::kernel::drivers::sb16::SbCard>,
-    sink: Option<&mut crate::kernel::sound::Sink>,
+    audio_runtime: &mut crate::kernel::sound::AudioRuntime,
 ) -> (crate::kernel::console::Console, Option<crate::kernel::drivers::sb16::SbCard>) {
     let (card, display) = screen.release(machine, bios_workspace);
     let (display, sb) = run_program(
         machine, bios_workspace, dos_template, threads, path, cmdline_tail, cwd, env, debug_watch,
-        display, sb, sink,
+        display, sb, audio_runtime,
     );
     (crate::kernel::console::Console::acquire(machine, card, display), sb)
 }
@@ -603,7 +605,7 @@ fn run_program<A: crate::Arch>(
     debug_watch: Option<(u32, u32)>,
     display: crate::kernel::display::Display,
     sb: Option<crate::kernel::drivers::sb16::SbCard>,
-    sink: Option<&mut crate::kernel::sound::Sink>,
+    audio_runtime: &mut crate::kernel::sound::AudioRuntime,
 ) -> (crate::kernel::display::Display, Option<crate::kernel::drivers::sb16::SbCard>) {
     use crate::kernel::{dos, exec};
 
@@ -677,7 +679,7 @@ fn run_program<A: crate::Arch>(
             crate::dbg_println!("[WATCH] armed write watchpoint at {:08X}", addr0);
         }
     }
-    event_loop(machine, bios_workspace, threads, tid, sb, sink)
+    event_loop(machine, bios_workspace, threads, tid, sb, audio_runtime)
 }
 
 /// Launch an ELF as a fresh Linux process thread and return its tid: stdin is
@@ -716,7 +718,7 @@ pub fn event_loop<A: crate::Arch>(
     threads: &mut [thread::Thread<A>],
     first_tid: usize,
     sb_card: Option<crate::kernel::drivers::sb16::SbCard>,
-    mut sink: Option<&mut crate::kernel::sound::Sink>,
+    audio_runtime: &mut crate::kernel::sound::AudioRuntime,
 ) -> (crate::kernel::display::Display, Option<crate::kernel::drivers::sb16::SbCard>) {
     crate::dbg_println!("event_loop entered, tid={}", first_tid);
     let mut ctx = crate::kernel::exec_ctx::ExecutionContext::seed(threads, first_tid);
@@ -727,7 +729,6 @@ pub fn event_loop<A: crate::Arch>(
     // KernelEvent::Irq. Either is only permission to resample the real clock.
     let mut irq_clock_wakeup = false;
     let mut exiting_display = None;
-    let mut audio_clock = crate::kernel::sound::Clock::new();
     // The machine's Sound Blaster lives in this frame for the loop's life,
     // beside the display token and for the same reason: it is one piece of
     // hardware with at most one guest owner, and the loop is what outlives
@@ -770,12 +771,11 @@ pub fn event_loop<A: crate::Arch>(
         // a synchronous framebuffer write can consume most of a millisecond.
         thread.personality.advance_world(
             machine, world_now_ns, elapsed_ns,
-            audio_clock.produced_frames());
+            audio_runtime.produced_frames());
         if elapsed_ns != 0 {
-            crate::kernel::sound::advance(
+            audio_runtime.service(
                 machine,
-                &mut audio_clock,
-                sink.as_deref_mut(),
+                crate::kernel::sound::AudioTime::from_nanos(world_now_ns),
                 elapsed_ns,
                 |machine, span| thread.personality.audio_tick(machine, world_now_ns, span),
             );

@@ -20,6 +20,8 @@
 
 use core::sync::atomic::{AtomicU32, Ordering};
 
+pub use sound::timeline::AudioTime;
+
 // RetroOS canonical audio device — a kernel-private ISA port window. It is
 // *never* guest-visible: only the kernel addresses it, through `machine.outw`
 // (guest `OUT`s surface as `KernelEvent::Out` and never reach this window). The
@@ -192,6 +194,58 @@ pub struct AudioSpan<'a> {
     pub rate: u32,
     pub base_frame: u64,
     pub frames: &'a mut [(i32, i32)],
+}
+
+/// Source-neutral audio orchestration boundary.
+///
+/// The architecture supplies the timestamp and elapsed interval. This type
+/// owns the logical source clock and selected sink, but it does not choose the
+/// clock source, schedule wakeups, or understand DOS device protocols.
+pub struct AudioRuntime {
+    clock: Clock,
+    sink: Option<Sink>,
+    render_frontier: AudioTime,
+}
+
+impl AudioRuntime {
+    pub fn new(sink: Option<Sink>) -> Self {
+        Self {
+            clock: Clock::new(),
+            sink,
+            render_frontier: AudioTime::ZERO,
+        }
+    }
+
+    pub fn produced_frames(&self) -> u64 {
+        self.clock.produced_frames()
+    }
+
+    pub fn render_frontier(&self) -> AudioTime {
+        self.render_frontier
+    }
+
+    /// Advance the canonical source/mixer path using time supplied by the
+    /// architecture event loop. Guest event producers may use their own
+    /// immediate `machine.now()` sample; this frontier records renderer
+    /// progress and is not a replacement for that event timestamp.
+    pub fn service<A: crate::Arch>(
+        &mut self,
+        machine: &mut A,
+        now: AudioTime,
+        elapsed_ns: u64,
+        mut mix: impl FnMut(&mut A, AudioSpan<'_>),
+    ) {
+        if elapsed_ns != 0 {
+            advance(
+                machine,
+                &mut self.clock,
+                self.sink.as_mut(),
+                elapsed_ns,
+                |machine, span| mix(machine, span),
+            );
+        }
+        self.render_frontier = now;
+    }
 }
 
 const MIX_CHUNK: usize = 128;
