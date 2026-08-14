@@ -39,7 +39,7 @@
 //! so reusing the same window + DMA channel is safe.
 
 use core::ptr::{read_volatile, write_volatile};
-use core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use core::sync::atomic::{AtomicU8, Ordering};
 const PTE_CACHE_DISABLE: u64 = 1 << 4;
 
 // ── Stolen kernel VAs (dead UMA slice of the low-mem identity window) ─────────
@@ -219,7 +219,6 @@ static OUTPUT_ROUTE: AtomicU8 = AtomicU8::new(DEFAULT_OUTPUT_ROUTE as u8);
 static REQUESTED_OUTPUT_ROUTE: AtomicU8 = AtomicU8::new(DEFAULT_OUTPUT_ROUTE as u8);
 /// Routes backed by a usable pin-to-DAC path on the active codec.
 static AVAILABLE_OUTPUT_ROUTES: AtomicU8 = AtomicU8::new(0);
-static OUTPUT_ROUTE_PENDING: AtomicBool = AtomicBool::new(false);
 /// True once the controller BAR is mapped at `BAR_WIN_VA` (panic-path guard).
 static BAR_MAPPED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 
@@ -235,6 +234,25 @@ fn parse_output_route(raw: &[u8]) -> Option<OutputRoute> {
     }
 }
 
+fn log_available_output_routes(prefix: &str, available: u8) {
+    crate::print!("hda: {} ", prefix);
+    let mut any = false;
+    for route in OutputRoute::ALL {
+        if available & route.bit() == 0 {
+            continue;
+        }
+        if any {
+            crate::print!(", ");
+        }
+        crate::print!("{}", core::str::from_utf8(route.label()).unwrap_or("?"));
+        any = true;
+    }
+    if !any {
+        crate::print!("none");
+    }
+    crate::print!("\n");
+}
+
 pub fn configure_output_route(raw: Option<&[u8]>) {
     let route = match raw {
         None => OutputRoute::Speaker,
@@ -242,7 +260,6 @@ pub fn configure_output_route(raw: Option<&[u8]>) {
             Some(route) => route,
             None => {
                 REQUESTED_OUTPUT_ROUTE.store(DEFAULT_OUTPUT_ROUTE as u8, Ordering::Relaxed);
-                OUTPUT_ROUTE_PENDING.store(false, Ordering::Relaxed);
                 crate::println!(
                     "hda: invalid HDA_OUTPUT={}",
                     core::str::from_utf8(value).unwrap_or("<non-UTF8>")
@@ -252,15 +269,14 @@ pub fn configure_output_route(raw: Option<&[u8]>) {
         },
     };
     REQUESTED_OUTPUT_ROUTE.store(route as u8, Ordering::Relaxed);
-    OUTPUT_ROUTE_PENDING.store(false, Ordering::Relaxed);
 }
 
 pub fn output_route_label() -> &'static [u8] {
-    OutputRoute::from_raw(OUTPUT_ROUTE.load(Ordering::Relaxed)).label()
+    OutputRoute::from_raw(REQUESTED_OUTPUT_ROUTE.load(Ordering::Relaxed)).label()
 }
 
 pub fn cycle_output_route(forward: bool) {
-    let current = OutputRoute::from_raw(OUTPUT_ROUTE.load(Ordering::Relaxed));
+    let current = OutputRoute::from_raw(REQUESTED_OUTPUT_ROUTE.load(Ordering::Relaxed));
     let next = current.next_available(
         forward,
         AVAILABLE_OUTPUT_ROUTES.load(Ordering::Relaxed),
@@ -269,11 +285,7 @@ pub fn cycle_output_route(forward: bool) {
         return;
     }
     REQUESTED_OUTPUT_ROUTE.store(next as u8, Ordering::Relaxed);
-    OUTPUT_ROUTE_PENDING.store(true, Ordering::Relaxed);
-    crate::println!(
-        "hda: requested output route {}",
-        core::str::from_utf8(next.label()).unwrap_or("?")
-    );
+    crate::kernel::sound::request_deferred_reset();
 }
 
 #[inline]
@@ -346,6 +358,8 @@ pub struct Hda {
     pin: u32,
     pin_def: u32,
     path: OutputPath,
+    output_paths: [OutputPath; OutputRoute::ALL.len()],
+    output_pin_defs: [u32; OutputRoute::ALL.len()],
     output_route: OutputRoute,
     running: bool,
     /// Bytes the codec has consumed since the stream started, monotonic, and
@@ -645,6 +659,8 @@ fn bring_up<A: crate::Arch>(machine: &mut A, bus: u8, dev: u8, func: u8) -> Opti
         pin: 0,
         pin_def: 0,
         path: OutputPath::EMPTY,
+        output_paths: [OutputPath::EMPTY; OutputRoute::ALL.len()],
+        output_pin_defs: [0; OutputRoute::ALL.len()],
         output_route: DEFAULT_OUTPUT_ROUTE,
         running: false,
         reported: 0,
@@ -802,7 +818,10 @@ fn bring_up<A: crate::Arch>(machine: &mut A, bus: u8, dev: u8, func: u8) -> Opti
     }
     OUTPUT_ROUTE.store(d.output_route as u8, Ordering::Relaxed);
     REQUESTED_OUTPUT_ROUTE.store(d.output_route as u8, Ordering::Relaxed);
-    OUTPUT_ROUTE_PENDING.store(false, Ordering::Relaxed);
+    log_available_output_routes(
+        "available outputs",
+        AVAILABLE_OUTPUT_ROUTES.load(Ordering::Relaxed),
+    );
     d.dump_output_state();
 
     // The stream format is this card's own constant, so it is programmed here
@@ -1073,6 +1092,13 @@ impl Hda {
                 mask | u8::from(path.len != 0) << index
             });
         AVAILABLE_OUTPUT_ROUTES.store(available, Ordering::Relaxed);
+        self.output_paths = best_by_route;
+        self.output_pin_defs = [0; OutputRoute::ALL.len()];
+        for (index, path) in best_by_route.iter().enumerate() {
+            if let Some(pin) = find_widget(&widgets, count, path.nodes[0]) {
+                self.output_pin_defs[index] = widgets[pin].def_cfg;
+            }
+        }
 
         let requested_path = best_by_route[requested as usize];
         let mut best = if requested_path.len != 0 {
@@ -1098,6 +1124,21 @@ impl Hda {
         if let Some(pin) = find_widget(&widgets, count, self.pin) {
             self.pin_def = widgets[pin].def_cfg;
         }
+        true
+    }
+
+    /// Select a route discovered during bring-up without walking the codec
+    /// graph again during playback control changes.
+    fn select_cached_output_path(&mut self, requested: OutputRoute) -> bool {
+        let path = self.output_paths[requested as usize];
+        if path.len == 0 {
+            return false;
+        }
+        self.output_route = requested;
+        self.path = path;
+        self.pin_def = self.output_pin_defs[requested as usize];
+        self.pin = path.nodes[0];
+        self.dac = path.nodes[path.len - 1];
         true
     }
 
@@ -1387,11 +1428,8 @@ impl Hda {
         }
     }
 
-    fn apply_pending_output_route(&mut self) {
-        if !OUTPUT_ROUTE_PENDING.swap(false, Ordering::Relaxed) {
-            return;
-        }
-
+    fn reset_output_route(&mut self) {
+        self.stop_playback();
         let old_pin = self.pin;
         let old_dac = self.dac;
         let old_pin_def = self.pin_def;
@@ -1400,8 +1438,12 @@ impl Hda {
         let old_available = AVAILABLE_OUTPUT_ROUTES.load(Ordering::Relaxed);
         let requested = OutputRoute::from_raw(REQUESTED_OUTPUT_ROUTE.load(Ordering::Relaxed));
 
+        if requested == old_route {
+            return;
+        }
+
         self.setup_corb_rirb();
-        if !self.select_output_path(requested) || self.verb_failed {
+        if !self.select_cached_output_path(requested) || self.verb_failed {
             self.pin = old_pin;
             self.dac = old_dac;
             self.pin_def = old_pin_def;
@@ -1714,7 +1756,6 @@ impl sound::sink::Device for Hda {
     /// controller re-evaluates the codec↔stream binding with the stream number
     /// visible.
     fn start(&mut self) {
-        self.apply_pending_output_route();
         assert_eq!(
             r16(self.sd + SDFMT),
             STREAM_FMT,
@@ -1738,6 +1779,7 @@ impl sound::sink::Device for Hda {
 
     fn reset(&mut self) {
         self.stop_playback();
+        self.reset_output_route();
         self.program_stream();
         w16(self.sd + SDFMT, STREAM_FMT);
     }
@@ -1748,7 +1790,6 @@ impl sound::sink::Device for Hda {
     }
 
     fn frames_played(&mut self) -> u64 {
-        self.apply_pending_output_route();
         self.advance()
     }
 }

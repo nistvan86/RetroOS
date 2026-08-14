@@ -538,22 +538,26 @@ feat(audio): add restartable sink preroll lifecycle
 
 Use `0224e82` and `686a12c` as behavioral references.
 
-- [ ] Detect and cache available HDA output routes during HDA initialization.
-- [ ] Store selected output route as ordinary HDA state independent of whether
+- [x] Detect and cache available HDA output routes during HDA initialization.
+- [x] Store selected output route as ordinary HDA state independent of whether
       playback is running.
-- [ ] Keep route labels derived from existing route/pin constants.
-- [ ] Let the OSD update the selected HDA route field immediately.
-- [ ] Have the OSD request a generic deferred sink reset.
-- [ ] Make the runtime service sink controls even when no PCM frames are
+- [x] Keep route labels derived from existing route/pin constants.
+- [x] Let the OSD update the selected HDA route field immediately.
+- [x] Have the OSD request a generic deferred sink reset.
+- [x] Make the runtime service sink controls even when no PCM frames are
       produced in that iteration.
-- [ ] Make HDA reset/reprogramming read the current selected route.
+- [x] Make HDA reset/reprogramming read the current selected route.
 - [ ] Log only concise initialization and selected/fallback information.
-- [ ] Do not print an unchanged "requested route" on every OSD input attempt.
-- [ ] Do not add `OUTPUT_ROUTE_PENDING` if the selected route field already
+- [x] Do not print an unchanged "requested route" on every OSD input attempt.
+- [x] Do not add `OUTPUT_ROUTE_PENDING` if the selected route field already
       contains the desired state.
-- [ ] Do not add `apply_pending_output_route()` to the main event loop.
-- [ ] Do not call HDA register programming directly from OSD code.
-- [ ] Do not add any video-mode reset subscriber.
+- [x] Do not add `apply_pending_output_route()` to the main event loop.
+- [x] Do not call HDA register programming directly from OSD code.
+- [x] Do not add any video-mode reset subscriber.
+
+Execution note: route discovery is cached and reset requests are now consumed
+by `AudioRuntime::service`, but the concise-log cleanup and end-to-end route
+toggle validation remain outstanding.
 
 Validate:
 

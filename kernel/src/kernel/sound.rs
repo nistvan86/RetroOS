@@ -39,6 +39,12 @@ pub use sound::RATE_FP_SHIFT;
 static UNDERRUNS: AtomicU32 = AtomicU32::new(0);
 /// Times the dashpot pushed the mixing rate far from `s`; see [`advance`].
 static RATE_SPIKES: AtomicU32 = AtomicU32::new(0);
+static SINK_RESET_REQUESTED: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
+
+pub fn request_deferred_reset() {
+    SINK_RESET_REQUESTED.store(true, Ordering::Release);
+}
 
 /// One real-time window's worth of pump accounting, for when the mix rate
 /// wanders and the sampled spike log cannot say why. Reported per ~3s of TSC;
@@ -195,6 +201,21 @@ impl Sink {
         self.playback = PlaybackState::PreRoll;
         self.recoveries = self.recoveries.saturating_add(1);
     }
+
+    fn perform_reset(&mut self) {
+        self.inner.reset();
+        self.producer = sound::Pacer::new(self.inner.rate());
+        self.last_consumed = 0;
+        self.ns_since_cursor = 0;
+        self.rate_q16 = None;
+        self.playback = PlaybackState::PreRoll;
+    }
+
+    fn service_controls(&mut self) {
+        if SINK_RESET_REQUESTED.swap(false, Ordering::Acquire) {
+            self.perform_reset();
+        }
+    }
 }
 
 /// Say out loud what the sink reported. The library has no console, and
@@ -270,6 +291,9 @@ impl AudioRuntime {
         elapsed_ns: u64,
         mut mix: impl FnMut(&mut A, AudioSpan<'_>),
     ) {
+        if let Some(sink) = self.sink.as_mut() {
+            sink.service_controls();
+        }
         if elapsed_ns != 0 {
             advance(
                 machine,
