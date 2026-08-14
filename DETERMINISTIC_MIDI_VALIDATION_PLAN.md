@@ -2851,3 +2851,41 @@ the sink independently manages real-time playback
 ```
 
 That is the foundation on which the remaining RetroOS audio devices should be implemented.
+
+## Rebase Execution Findings
+
+This section records the result of rebuilding the PoC on the blessed
+`origin/master` timing architecture.
+
+- Upstream now owns authoritative nanosecond `now_ns`/`elapsed_ns` timing and
+  coalesced IRQ0 wakeups, with TSC, HPET, or PIT2 fallback. The old HPET
+  correction, pending-tick authority, separate audio wakeup counter,
+  `ServiceDivider`, microsecond timeline adapter, and fractional-microsecond
+  remainder are not part of this rebase.
+- The rework keeps a thin `AudioRuntime` boundary around upstream's nanosecond
+  `sound::advance()` path. It does not create a second clock, scheduler, IRQ
+  cadence, or architecture-specific timer file.
+- Raw MPU command/data writes remain the required history format. The guest
+  frontend handles each port operation immediately, then records it with
+  `machine.now()` in a fixed timestamp queue. Replay occurs at the MIDI source
+  render boundary, not as a separate event-loop `tick()`.
+- `AUDIO_VALIDATION=MIDI` intentionally leaves SB, GUS, OPL, and speaker
+  protocol state guest-visible while silencing their PCM source slots. This is
+  a validation mode, not a claim that their audio paths are migrated.
+- The reusable sink starts stopped, accepts real PCM during preroll, and
+  exposes explicit pause/reset/start lifecycle operations. HDA, AC'97, and
+  SB16 implement the common lifecycle surface; HDA routes are cached at
+  initialization and applied through a generic deferred sink reset.
+- Image/kernel builds, architecture tests, sound tests, the enabled shell
+  suite, 86Box SB assertions, and the 60-second `audio_steady.sh` run passed.
+  The bounded Doom QEMU run reaches MPU/HDA initialization and playback, but
+  currently produces repeated underrun recoveries; this remains an open
+  runtime-tuning item.
+- Full Clippy is blocked by two untouched upstream diagnostics in
+  `arch-metal/src/irq.rs` (`precedence` and `deref_addrof`). They are recorded
+  as baseline failures and are not fixed by this feature rebase.
+- `AdvanceOnly` remains an explicit future source contract. This PoC does not
+  mark an unimplemented no-op path as complete.
+- OPL is the next low-risk source migration; SB and GUS should follow only
+  after choosing explicit mutable-memory ownership strategies for their DMA,
+  sample RAM, and voice state.

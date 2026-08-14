@@ -664,9 +664,9 @@ recreate the architecture from scratch.
 
 ### 13.6 Validate and commit
 
-- [ ] Run event queue and MIDI library unit tests.
-- [ ] Build kernel/image.
-- [ ] Boot the manually known-good QEMU HDA configuration.
+- [x] Run event queue and MIDI library unit tests.
+- [x] Build kernel/image.
+- [x] Boot the manually known-good QEMU HDA configuration.
 - [ ] Confirm logs show MPU initialization, HDA initialization, sink preroll,
       playback start, and first frame consumed.
 - [ ] Run DOSMid interactively and play at least one bundled multi-minute MIDI.
@@ -722,12 +722,12 @@ test(audio): isolate deterministic MIDI validation
 
 ### 15.2 DOSMid fixtures
 
-- [ ] Port `test/dosmid/*` and only the required `BUILD.bazel` entries in a
+- [x] Port `test/dosmid/*` and only the required `BUILD.bazel` entries in a
       separate commit.
-- [ ] Preserve DOS 8.3 names.
-- [ ] Keep DOSMid in its own directory.
-- [ ] Verify redistribution terms from the bundled documentation.
-- [ ] Do not add unrelated game-image dependencies to tests.
+- [x] Preserve DOS 8.3 names.
+- [x] Keep DOSMid in its own directory.
+- [x] Verify redistribution terms from the bundled documentation.
+- [x] Do not add unrelated game-image dependencies to tests.
 
 ### 15.3 Commits
 
@@ -745,26 +745,26 @@ test(midi): add DOSMid validation fixtures
 
 ## 16. Stage 10: Update Documentation with Actual Findings
 
-- [ ] Update `DETERMINISTIC_MIDI_VALIDATION_PLAN.md` only where completed work
+- [x] Update `DETERMINISTIC_MIDI_VALIDATION_PLAN.md` only where completed work
       or newly discovered divergence must be recorded.
-- [ ] Do not rewrite untouched historical sections as if they originally used
+- [x] Do not rewrite untouched historical sections as if they originally used
       upstream nanosecond timing.
-- [ ] Mark these old mechanisms superseded:
+- [x] Mark these old mechanisms superseded:
   - HPET reconciliation commit;
   - pending-tick elapsed-time authority;
   - separate audio wakeup counter;
   - 500 Hz `ServiceDivider`;
   - microsecond `AudioTimeline` adapter;
   - fractional microsecond remainder.
-- [ ] Record that upstream now supplies TSC, HPET, or PIT2-backed `now_ns` and
+- [x] Record that upstream now supplies TSC, HPET, or PIT2-backed `now_ns` and
       coalesced IRQ0 wakeups.
-- [ ] Record that raw MPU command/data queueing was required by the verified
+- [x] Record that raw MPU command/data queueing was required by the verified
       PoC, even though the older wiki suggested completed MIDI events.
-- [ ] Record that mixing runs after the architecture wakeup regains kernel
+- [x] Record that mixing runs after the architecture wakeup regains kernel
       control, not as heavy work directly inside the hard IRQ.
-- [ ] Record that `AdvanceOnly` remains a required future capability but the
+- [x] Record that `AdvanceOnly` remains a required future capability but the
       current no-op implementation was not retained as completed behavior.
-- [ ] Record that OPL is the next low-risk migration and SB/GUS require mutable
+- [x] Record that OPL is the next low-risk migration and SB/GUS require mutable
       memory strategies.
 - [ ] Commit documentation separately:
 
