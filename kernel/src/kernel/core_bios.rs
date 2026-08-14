@@ -905,6 +905,7 @@ impl crate::kernel::platform::VgaCap {
         bios: &mut BiosDisplayWorkspace<A>,
         mode: u16,
     ) -> Result<(), BiosError> {
+        crate::kernel::blocking::before_blocking_operation();
         self.bios(bios)?.set_mode(machine, self, mode)
     }
 
@@ -915,6 +916,7 @@ impl crate::kernel::platform::VgaCap {
         bios: &mut BiosDisplayWorkspace<A>,
         request: u16,
     ) -> Result<(), BiosError> {
+        crate::kernel::blocking::before_blocking_operation();
         self.bios(bios)?.set_mode_request(machine, self, request)
     }
 

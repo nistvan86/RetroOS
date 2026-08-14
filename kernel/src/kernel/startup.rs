@@ -721,6 +721,7 @@ pub fn event_loop<A: crate::Arch>(
     audio_runtime: &mut crate::kernel::sound::AudioRuntime,
 ) -> (crate::kernel::display::Display, Option<crate::kernel::drivers::sb16::SbCard>) {
     crate::dbg_println!("event_loop entered, tid={}", first_tid);
+    audio_runtime.install_blocking_reset_hook();
     let mut ctx = crate::kernel::exec_ctx::ExecutionContext::seed(threads, first_tid);
     let mut stats = EventStats::new(machine);
     let mut last_osd_refresh_tick = u64::MAX;

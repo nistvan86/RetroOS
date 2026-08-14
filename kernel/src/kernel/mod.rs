@@ -33,6 +33,7 @@ pub mod stacktrace;
 
 // ── Kernel APIs the personalities call: one surface per resource class ───
 pub mod block;
+pub mod blocking;
 pub mod console;
 pub mod display;
 pub mod keyboard;

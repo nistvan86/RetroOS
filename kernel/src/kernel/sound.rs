@@ -216,17 +216,21 @@ impl Sink {
             self.perform_reset();
         }
     }
+
+    fn prepare_for_blocking_operation(&mut self) {
+        crate::println!("sound: sink paused for blocking operation");
+        self.inner.pause_and_reset();
+        self.producer = sound::Pacer::new(self.inner.rate());
+        self.last_consumed = 0;
+        self.ns_since_cursor = 0;
+        self.rate_q16 = None;
+        self.playback = PlaybackState::PreRoll;
+    }
 }
 
 /// Say out loud what the sink reported. The library has no console, and
 /// whether an underrun is worth printing is a property of the machine.
 fn say(report: sound::sink::Report) {
-    if report.first_frame {
-        // The difference between "armed" and "the DAC is actually consuming" —
-        // where metal bring-up goes wrong, and invisible in a counter that
-        // only reports problems.
-        crate::println!("sink: first frame played");
-    }
     if let Some(u) = report.underrun {
         let n = UNDERRUNS.fetch_add(1, Ordering::Relaxed) + 1;
         crate::println!(
@@ -282,6 +286,15 @@ impl AudioRuntime {
         }
     }
 
+    pub(crate) fn install_blocking_reset_hook(&mut self) {
+        if let Some(sink) = self.sink.as_mut() {
+            crate::kernel::blocking::install(crate::kernel::blocking::BlockingOperationHook::new(
+                prepare_for_blocking_operation,
+                (sink as *mut Sink).cast(),
+            ));
+        }
+    }
+
     pub fn produced_frames(&self) -> u64 {
         self.clock.produced_frames()
     }
@@ -315,6 +328,12 @@ impl AudioRuntime {
         }
         self.render_frontier = now;
     }
+}
+
+fn prepare_for_blocking_operation(context: *mut ()) {
+    // SAFETY: the context points to the sink owned by the long-lived runtime
+    // in the event loop and remains valid until that loop exits.
+    unsafe { (&mut *(context.cast::<Sink>())).prepare_for_blocking_operation(); }
 }
 
 const MIX_CHUNK: usize = 128;

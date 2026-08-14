@@ -1774,7 +1774,14 @@ impl sound::sink::Device for Hda {
     }
 
     fn pause(&mut self) {
+        let was_running = self.running;
         self.stop_playback();
+        if was_running {
+            crate::println!(
+                "hda: stream PAUSE sdctl={:#010x} lpib={}",
+                r32(self.sd + SDCTL), r32(self.sd + SDLPIB),
+            );
+        }
     }
 
     fn reset(&mut self) {
