@@ -255,6 +255,45 @@ same HDA route, 48 kHz sink, and 1440-frame preroll were observed in QEMU.
 This confirms that the change is limited to delayed-service continuity and
 does not replace genuine cursor/headroom underrun recovery.
 
+### QEMU HDA cursor-jump finding
+
+The temporary diagnostic build compared the HDA stream's raw `SDLPIB`
+(*Stream Descriptor Link Position In Buffer*) cursor
+with the previous sampled cursor. A representative line was:
+
+```text
+delta_bytes=532 delta_frames=133 consumed_bytes=9984 reported_frames=2496
+```
+
+HDA uses four bytes per stereo frame, so `532 / 4 = 133` frames were consumed
+since the previous observation, while `9984 / 4 = 2496` frames had been
+consumed cumulatively. At 48 kHz, 133 frames is about 2.77 ms. Large values
+appeared mainly while entering or leaving F12, when guest servicing was
+temporarily delayed.
+
+The values were extracted directly from the controller's `SDLPIB` register:
+
+```text
+position = SDLPIB % ring_bytes
+delta_bytes = (position + ring_bytes - previous_position) % ring_bytes
+delta_frames = delta_bytes / bytes_per_frame
+consumed_bytes += delta_bytes
+reported_frames = consumed_bytes / bytes_per_frame
+```
+
+Repeating the same observation with the system QEMU 8.2.2 and a privately
+built QEMU 11.1.50 showed the same large cursor jumps. This identifies the
+immediate cause as QEMU's timer-driven HDA emulation advancing `SDLPIB` in
+coalesced steps when the guest is not serviced frequently, rather than a
+RetroOS ring-accounting error. It does not by itself prove that every audible
+glitch is caused by QEMU.
+
+This remains related to the open QEMU HDA stream/timer issue:
+<https://gitlab.com/qemu-project/qemu/-/issues/2639>
+
+The temporary trace fields were removed after this comparison; normal builds
+retain only the existing backend-neutral counters and recovery messages.
+
 ### Phase 24 instrumentation progress
 
 The existing HDA census remains trace-gated and reports aggregate service,
