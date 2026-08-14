@@ -516,9 +516,8 @@ their hardware-specific pause/reset behavior is ported in section 11.4.
       `AdvanceOnly` responsibility; do not fake it by returning from the source.
 
 Execution note: the kernel sink now has stopped construction, latency-derived
-real-audio preroll, and a restartable underrun path. Requested-reset handling,
-hardware cursor reset, and diagnostic counters remain pending in sections 11.2,
-11.4, and 11.5.
+real-audio preroll, a restartable underrun path, and deferred reset handling.
+Diagnostic counters and stable Doom-QEMU recovery behavior remain pending.
 
 ### 11.4 Driver changes
 
@@ -527,9 +526,9 @@ hardware cursor reset, and diagnostic counters remain pending in sections 11.2,
 - [x] In SB16 sink mode, implement only required common lifecycle operations.
 - [ ] Confirm ordinary native SB passthrough behavior is unchanged.
 
-Execution note: HDA route reprogramming is intentionally still on the old
-pending-route path at this point. The lifecycle methods only reset the stream;
-route caching and deferred control servicing are the next stage.
+Execution note: HDA route reprogramming now reads the cached route selected at
+bring-up and is triggered by the generic deferred sink reset. Native SB
+passthrough remains outside this validation pass.
 
 ### 11.5 Validate and commit
 
