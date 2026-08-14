@@ -243,6 +243,13 @@ The first execution pass exposed these differences from the original plan:
   `experiment/deterministic-audio-rebase`.
 - The approved plan documents were preserved in documentation-only commits.
   No remote branch or tag has been pushed.
+- The full validation build (`//:image` and `//kernel:kernel_elf`), architecture
+  tests, and sound-library tests passed. Full validation then stopped at
+  Clippy because untouched upstream `arch-metal/src/irq.rs` violates
+  `clippy::precedence` and `clippy::deref_addrof`; these are not rebase files
+  and are recorded as baseline failures rather than fixed here.
+- The validation harness initially used `rg -E`, which this `rg` interprets as
+  an encoding option. The check was corrected to use `rg --regexp`.
 
 ## 9. File Ownership Map
 
@@ -672,11 +679,11 @@ feat(midi): replay timestamped MPU history in the audio runtime
 The current branch intentionally validates one deterministic source. Preserve
 that experimental condition; do not represent it as final production policy.
 
-- [ ] Keep or restore `AUDIO_VALIDATION=MIDI` in `etc/CONFIG.SYS`.
-- [ ] Add a comment or plan note stating that it temporarily disconnects
+- [x] Keep or restore `AUDIO_VALIDATION=MIDI` in `etc/CONFIG.SYS`.
+- [x] Add a comment or plan note stating that it temporarily disconnects
       non-migrated PCM providers from the canonical mixer.
-- [ ] Keep guest-visible SB/GUS/OPL devices where the current PoC keeps them.
-- [ ] Do not claim GVOICE, SB digital audio, GUS output, or speaker output is
+- [x] Keep guest-visible SB/GUS/OPL devices where the current PoC keeps them.
+- [x] Do not claim GVOICE, SB digital audio, GUS output, or speaker output is
       expected to work in this validation configuration.
 - [ ] Record expected test exclusions explicitly.
 - [ ] Do not delete failing tests globally. Skip them only in the validation

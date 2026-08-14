@@ -252,6 +252,16 @@ pub struct AudioSpan<'a> {
     pub frames: &'a mut [(i32, i32)],
 }
 
+/// Source-neutral rendering boundary shared by emulated audio producers.
+pub trait AudioSource<A: crate::Arch> {
+    fn render(
+        &mut self,
+        machine: &mut A,
+        mode: sound::timeline::RenderMode,
+        span: AudioSpan<'_>,
+    );
+}
+
 /// Source-neutral audio orchestration boundary.
 ///
 /// The architecture supplies the timestamp and elapsed interval. This type
