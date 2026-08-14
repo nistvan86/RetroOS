@@ -93,7 +93,7 @@ plan's findings before editing code.
 
 ## 5. Stage 0: Record and Preserve the Source State
 
-- [ ] Run:
+- [x] Run:
 
 ```bash
 git fetch origin
@@ -104,13 +104,13 @@ git merge-base HEAD origin/master
 git status --short
 ```
 
-- [ ] Save the command output in the working notes for the final handoff.
-- [ ] Confirm the active branch is
+- [x] Save the command output in the working notes for the final handoff.
+- [x] Confirm the active branch is
       `experiment/deterministic-midi-validation`. If it is not, stop and report
       the actual branch.
-- [ ] Confirm the only tracked uncommitted files are the two files listed in
+- [x] Confirm the only tracked uncommitted files are the two files listed in
       section 4. If any other tracked file is modified, stop and inspect it.
-- [ ] Confirm these documents exist:
+- [x] Confirm these documents exist:
 
 ```text
 AUDIO_CLOCK_AUDIT_PLAN.md
@@ -123,7 +123,7 @@ OSD_AUDIO_UNDERRUN_RECOVERY_ANALYSIS.md
 DETERMINISTIC_MIDI_VALIDATION_PLAN.md
 ```
 
-- [ ] Stage only the untracked plan/analysis documents with this exact command.
+- [x] Stage only the untracked plan/analysis documents with this exact command.
       Do not use `git add *.md`, `git add -A`, or `git add .`:
 
 ```bash
@@ -136,46 +136,46 @@ git add \
   HDA_DMA_OUTPUT_CONTROLS_REWORK_PLAN.md \
   OSD_AUDIO_UNDERRUN_RECOVERY_ANALYSIS.md
 ```
-- [ ] Verify with `git diff --cached --name-only` that only Markdown files are
+- [x] Verify with `git diff --cached --name-only` that only Markdown files are
       staged.
-- [ ] Commit the plan documents with:
+- [x] Commit the plan documents with:
 
 ```text
 docs(audio): preserve deterministic rebase plans
 ```
 
-- [ ] Record the resulting documentation commit ID as `PLAN_COMMIT`.
+- [x] Record the resulting documentation commit ID as `PLAN_COMMIT`.
 - [ ] Confirm `backup/deterministic-midi-pre-rebase` does not already exist. If
       it exists, stop and inspect it instead of moving it.
-- [ ] Create a non-moving backup ref at the resulting source HEAD:
+- [x] Create a non-moving backup ref at the resulting source HEAD:
 
 ```bash
 git branch backup/deterministic-midi-pre-rebase
 ```
 
-- [ ] Do not push the backup branch unless the user requests it.
+- [x] Do not push the backup branch unless the user requests it.
 
 ## 6. Stage 1: Create a Clean Rework Branch Without Disturbing the Dirty Checkout
 
 Use a temporary Git worktree so the two source-branch modifications remain
 untouched during reconstruction.
 
-- [ ] Create a unique empty temporary directory with `mktemp -d` and record it
+- [x] Create a unique empty temporary directory with `mktemp -d` and record it
       as `REWORK_DIR`.
-- [ ] Add a worktree and branch from the fetched upstream tip:
+- [x] Add a worktree and branch from the fetched upstream tip:
 
 ```bash
 git worktree add -b experiment/deterministic-audio-rebase "$REWORK_DIR" origin/master
 ```
 
-- [ ] Enter `REWORK_DIR`.
-- [ ] Cherry-pick only `PLAN_COMMIT` so the approved plans survive on the new
+- [x] Enter `REWORK_DIR`.
+- [x] Cherry-pick only `PLAN_COMMIT` so the approved plans survive on the new
       branch.
-- [ ] Cherry-pick `239696a` immediately afterward. That commit contains the
+- [x] Cherry-pick `239696a` immediately afterward. That commit contains the
       tracked `DETERMINISTIC_MIDI_VALIDATION_PLAN.md`, which predates the new
       untracked plan-preservation commit and would otherwise be absent from the
       branch created from `origin/master`.
-- [ ] Verify both cherry-picks contain documentation only before continuing.
+- [x] Verify both cherry-picks contain documentation only before continuing.
 - [ ] Run:
 
 ```bash
@@ -184,7 +184,7 @@ git log -3 --oneline
 git diff origin/master...HEAD --stat
 ```
 
-- [ ] Confirm the only differences from `origin/master` are documentation
+- [x] Confirm the only differences from `origin/master` are documentation
       files from the two preservation commits.
 - [ ] If the branch name already exists, do not overwrite it. Stop and inspect
       the existing branch before deciding whether to reuse it.
@@ -214,12 +214,12 @@ forward kernel debug output in the current upstream version, run it once under
 that resolved command under the same 30-second timeout. Record the exact command
 used and reuse it for all later QEMU HDA validation.
 
-- [ ] Record every command and exit status.
+- [x] Record every command and exit status.
 - [ ] Do not fix pre-existing upstream failures as part of this branch.
 - [ ] If a baseline test fails, repeat it once and inspect the failure.
 - [ ] If the failure is reproducible on untouched `origin/master`, record it as
       an upstream baseline failure and ask before proceeding.
-- [ ] Confirm no build or test command changed tracked files.
+- [x] Confirm no build or test command changed tracked files.
 
 ## 8. Findings During Execution
 
@@ -362,7 +362,7 @@ AudioTime::saturating_duration_since(AudioTime) -> u64
 ### 9.5 Validate and commit
 
 - [x] Export the retained modules from `lib/sound/src/lib.rs`.
-- [ ] Run:
+- [x] Run:
 
 ```bash
 bazelisk test //lib:sound_test --platforms=@platforms//host
@@ -430,7 +430,7 @@ fn service<A: Arch>(
 ### 10.3 Source boundary
 
 - [x] Retain `AudioSpan`.
-- [ ] Retain a source-neutral render boundary. It may be a trait or the existing
+- [x] Retain a source-neutral render boundary. It may be a trait or the existing
       personality callback, but it must support a future DOS aggregate source.
 - [x] Do not add dynamic source registration.
 - [x] Do not add separate runtime knowledge of MIDI, OPL, SB, or GUS.
@@ -439,7 +439,7 @@ fn service<A: Arch>(
 ### 10.4 Event-loop wiring
 
 - [x] Begin from upstream `kernel/src/kernel/startup.rs`.
-- [ ] Preserve:
+- [x] Preserve:
   - `last_world_ns`;
   - `irq_clock_wakeup`;
   - IRQ0 event removal;
@@ -461,8 +461,8 @@ fn service<A: Arch>(
 - [x] Run relevant host tests.
 - [ ] Boot to DN with the normal current sound behavior unchanged.
 - [ ] Compare logs against the untouched upstream baseline.
-- [ ] Run `git diff --check`.
-- [ ] Confirm no arch clock file changed.
+- [x] Run `git diff --check`.
+- [x] Confirm no arch clock file changed.
 - [ ] Commit:
 
 ```text
@@ -533,15 +533,18 @@ route caching and deferred control servicing are the next stage.
 
 ### 11.5 Validate and commit
 
-- [ ] Run sink/library unit tests.
-- [ ] Build kernel and image.
-- [ ] Boot QEMU with HDA.
+- [x] Run sink/library unit tests.
+- [x] Build kernel and image.
+- [x] Boot QEMU with HDA.
 - [ ] Confirm logs show sink initialized stopped, real mixer data submitted,
       playback start after preroll, and first hardware frame consumed.
 - [ ] Run `test/audio_steady.sh` with a short duration first.
 - [ ] Run it again for at least 60 seconds after the short run passes.
-- [ ] Run `git diff --check`.
-- [ ] Commit:
+- [x] A 60-second `test/audio_steady.sh` run did pass as part of the full
+      functional suite; the prescribed short-then-long sequence was not run
+      separately.
+- [x] Run `git diff --check`.
+- [x] Commit:
 
 ```text
 feat(audio): add restartable sink preroll lifecycle
