@@ -554,7 +554,6 @@ Confirm the log order is:
     sound: first mixer block submitted ...
     sound: playback start preroll_frames=... target_frames=...
     hda: stream RUN ...
-    sink: first frame played
 
 The exact ordering of the playback-start and HDA RUN lines may be reversed only
 if the kernel marker is emitted after `inner.start()`; choose one ordering and
@@ -597,7 +596,7 @@ After manual reboot, collect `/proc/klog.txt` and verify:
    block—not after an artificial 50 ms delay.
 4. The former ~2,000 startup-underrun flood is absent.
 5. Each genuine recovery episode has one lifecycle line; no `... skipped ...`
-   message or separate underrun warning remains.
+   message or separate legacy underrun warning remains.
 6. DOOM has no detectable pitch bend while a key is held.
 7. Duke3D VESA 800x600 survives F12 OSD open/close.
 8. After OSD close, audio resumes after a short clean gap without crackling,
@@ -610,7 +609,32 @@ After manual reboot, collect `/proc/klog.txt` and verify:
 If recovery loops continuously, record the lifecycle lines before changing
 the configured latency or `MAX_PREROLL_GAP_MS` blindly.
 
-## 20. Commit structure
+## 20. Findings from the current implementation
+
+The implementation confirms that underrun recovery does not require a full
+backend reset. The sink now has two explicit reset paths:
+
+- `pause_and_reset()` pauses playback, clears the shared PCM ring and software
+  cursors, and returns to `PreRoll`. It is used for underruns and synchronous
+  blocking-operation stalls.
+- `perform_full_reset()` invokes the backend's full reset operation and is
+  reserved for deferred sink controls such as HDA output-route changes.
+
+This distinction matters for native VGA mode changes: HDA is paused without
+reprogramming codec routes or CORB/RIRB state, avoiding the freeze seen when a
+full codec reset was performed during the video BIOS transaction. AC'97 and
+SB16 provide their own safe `pause()`/restart implementations through the
+same backend-neutral sink interface.
+
+Underrun reporting is state-aware. An underrun while `Running` starts one
+recovery episode and emits one lifecycle line. Reports observed while the
+sink is already in `PreRoll` are counted silently and are included once in the
+next playback-start line as `suppressed_underruns=N`; they do not trigger a
+second sink reset or another log line. The obsolete `sink: first frame played`
+and standalone `WARNING: sound underrun` messages are not part of the current
+diagnostic format.
+
+## 21. Commit structure
 
 Produce one implementation commit on top of the HPET commit:
 
@@ -632,7 +656,7 @@ The commit body must explain:
 
 Do not commit this plan or any other plan/analysis Markdown file.
 
-## 21. Final review checklist
+## 22. Final review checklist
 
 Before handing the branch back, confirm:
 

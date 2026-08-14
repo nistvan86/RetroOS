@@ -105,6 +105,8 @@ pub struct Sink {
     playback: PlaybackState,
     preroll_frames: u64,
     recoveries: u64,
+    underrun_episodes: u32,
+    suppressed_underruns: u32,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -167,6 +169,8 @@ impl Sink {
             playback: PlaybackState::PreRoll,
             preroll_frames,
             recoveries: 0,
+            underrun_episodes: 0,
+            suppressed_underruns: 0,
         })
     }
 
@@ -179,30 +183,59 @@ impl Sink {
         {
             self.inner.start();
             self.playback = PlaybackState::Running;
-            crate::println!(
-                "sound: playback start queued={} preroll_frames={}",
-                self.inner.written_frames().saturating_sub(self.inner.consumed_frames()),
-                self.preroll_frames,
-            );
+            let suppressed = core::mem::take(&mut self.suppressed_underruns);
+            if suppressed == 0 {
+                crate::println!(
+                    "sound: playback start queued={} preroll_frames={}",
+                    self.inner.written_frames().saturating_sub(self.inner.consumed_frames()),
+                    self.preroll_frames,
+                );
+            } else {
+                crate::println!(
+                    "sound: playback start queued={} preroll_frames={} suppressed_underruns={}",
+                    self.inner.written_frames().saturating_sub(self.inner.consumed_frames()),
+                    self.preroll_frames, suppressed,
+                );
+            }
         }
     }
 
-    fn poll(&mut self) -> sound::sink::Report {
-        self.inner.poll()
+    fn poll(&mut self) -> bool {
+        let report = self.inner.poll();
+        let Some(underrun) = report.underrun else { return false };
+        if self.playback == PlaybackState::PreRoll {
+            self.suppressed_underruns = self.suppressed_underruns.saturating_add(1);
+            return false;
+        }
+        self.underrun_episodes = self.underrun_episodes.saturating_add(1);
+        let total = UNDERRUNS.fetch_add(1, Ordering::Relaxed) + 1;
+        crate::println!(
+            "sound: playback recovery reason=underrun episode={} total={} written={} consumed={}",
+            self.underrun_episodes, total, underrun.written_frames, underrun.consumed_frames,
+        );
+        true
     }
 
     /// Re-anchor the physical pipe after the device overtook its producer.
     fn recover_from_underrun(&mut self) {
+        self.pause_and_reset();
+        self.recoveries = self.recoveries.saturating_add(1);
+    }
+
+    /// Pause playback and discard the current ring without reprogramming the
+    /// backend. This is the cheap recovery path for underruns and stalls.
+    fn pause_and_reset(&mut self) {
         self.inner.pause_and_reset();
         self.producer = sound::Pacer::new(self.inner.rate());
         self.last_consumed = 0;
         self.ns_since_cursor = 0;
         self.rate_q16 = None;
         self.playback = PlaybackState::PreRoll;
-        self.recoveries = self.recoveries.saturating_add(1);
     }
 
-    fn perform_reset(&mut self) {
+    /// Fully reinitialize the backend. Route changes and backend-specific
+    /// reprogramming use this; ordinary playback recovery must not.
+    fn perform_full_reset(&mut self) {
         self.inner.reset();
         self.producer = sound::Pacer::new(self.inner.rate());
         self.last_consumed = 0;
@@ -213,30 +246,13 @@ impl Sink {
 
     fn service_controls(&mut self) {
         if SINK_RESET_REQUESTED.swap(false, Ordering::Acquire) {
-            self.perform_reset();
+            self.perform_full_reset();
         }
     }
 
     fn prepare_for_blocking_operation(&mut self) {
         crate::println!("sound: sink paused for blocking operation");
-        self.inner.pause_and_reset();
-        self.producer = sound::Pacer::new(self.inner.rate());
-        self.last_consumed = 0;
-        self.ns_since_cursor = 0;
-        self.rate_q16 = None;
-        self.playback = PlaybackState::PreRoll;
-    }
-}
-
-/// Say out loud what the sink reported. The library has no console, and
-/// whether an underrun is worth printing is a property of the machine.
-fn say(report: sound::sink::Report) {
-    if let Some(u) = report.underrun {
-        let n = UNDERRUNS.fetch_add(1, Ordering::Relaxed) + 1;
-        crate::println!(
-            "WARNING: sound underrun #{} written_frames={} consumed_frames={}",
-            n, u.written_frames, u.consumed_frames
-        );
+        self.pause_and_reset();
     }
 }
 
@@ -394,7 +410,7 @@ pub fn advance<A: crate::Arch>(
     let mut fill = 0;
     let mut drained = 0;
     let rate_q16 = if let Some(output) = sink.as_deref_mut() {
-        say(output.poll());
+        let reported_underrun = output.poll();
         let rate = output.inner.rate();
         let requested = (u64::from(rate)
             * u64::from(crate::kernel::osd::audio_latency_ms()))
@@ -402,7 +418,7 @@ pub fn advance<A: crate::Arch>(
         written = output.inner.written_frames();
         consumed = output.inner.consumed_frames();
         fill = requested.min(output.inner.max_ahead_frames()) as u32;
-        if written < consumed {
+        if reported_underrun || (written < consumed && output.playback == PlaybackState::Running) {
             // The consumer crossed the producer frontier. Rebase immediately
             // and produce this pump at the reset cursor. Tell the pacer that
             // the new pipe is empty so it starts rebuilding the requested
