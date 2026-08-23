@@ -192,7 +192,10 @@ pub fn run<A: crate::Arch>(
     loop {
         if let Some(event) = crate::kernel::serial_console::try_read_event() {
             let input = match event {
-                ConsoleProtocolEvent::Control(ConsoleControl::Reboot) => machine.reboot(),
+                ConsoleProtocolEvent::Control(ConsoleControl::Reboot) => {
+                    crate::println!("serial control: reboot requested");
+                    machine.reboot()
+                }
                 ConsoleProtocolEvent::Input(InputEvent::Byte(byte)) => Some(InputEvent::Byte(byte)),
                 ConsoleProtocolEvent::Input(InputEvent::Scancode(scancode)) => {
                     if crate::kernel::keyboard::update_key_state(scancode) {

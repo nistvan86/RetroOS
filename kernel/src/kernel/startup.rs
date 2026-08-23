@@ -1026,6 +1026,7 @@ pub fn event_loop<A: crate::Arch>(
                     crate::kernel::console_protocol::ConsoleControl::Reboot
                 )
             ) {
+                crate::println!("serial control: reboot requested");
                 machine.reboot();
             }
         }
