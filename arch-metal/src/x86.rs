@@ -512,12 +512,27 @@ pub fn shutdown() -> ! {
 /// state.
 pub fn reboot() -> ! {
     cli();
+    // First use the keyboard controller reset command. It is the most widely
+    // compatible PC reset request, but some chipsets acknowledge it without
+    // actually asserting RESET#.
     for _ in 0..100_000 {
         if inb(0x64) & 0x02 == 0 {
             outb(0x64, 0xFE);
+            for _ in 0..10_000 {
+                core::hint::spin_loop();
+            }
             break;
         }
     }
+
+    // Southbridge reset control fallback. Bit 1 enables reset and bit 2
+    // selects a hard reset on the Intel PC-compatible chipsets used by QEMU,
+    // 86Box, and the SEJT.
+    outb(0xCF9, 0x02);
+    outb(0xCF9, 0x06);
+
+    // If both mechanisms are unavailable, never continue executing after a
+    // reboot request.
     crate::halt_forever()
 }
 
