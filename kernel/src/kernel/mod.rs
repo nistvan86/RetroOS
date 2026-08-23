@@ -10,6 +10,7 @@
 //!   * `drivers` / `fs` — the concrete hardware and on-disk formats
 
 // ── Execution: threads, scheduling, address spaces, loading ──────────────
+pub mod early_console;
 pub mod elf;
 pub mod exec;
 pub mod exec_ctx;
@@ -35,6 +36,7 @@ pub mod stacktrace;
 // ── Kernel APIs the personalities call: one surface per resource class ───
 pub mod block;
 pub mod console;
+pub mod console_session;
 pub mod display;
 pub mod keyboard;
 pub mod kpipe;
