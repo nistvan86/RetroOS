@@ -1019,6 +1019,16 @@ pub fn event_loop<A: crate::Arch>(
     loop {
         stats.slice_begin(machine);
         stats.iteration(machine);
+        while let Some(event) = crate::kernel::serial_console::try_read_event() {
+            if matches!(
+                event,
+                crate::kernel::console_protocol::ConsoleProtocolEvent::Control(
+                    crate::kernel::console_protocol::ConsoleControl::Reboot
+                )
+            ) {
+                machine.reboot();
+            }
+        }
         let mut events = crate::kernel::irq_dispatch::drain(machine);
         stats.part(machine, 1);
         let tick_wakeup = events

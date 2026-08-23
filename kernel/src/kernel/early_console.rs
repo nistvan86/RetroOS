@@ -1,5 +1,6 @@
 //! Allocation-free command endpoint for the kernel-owned early console.
 
+use super::console_protocol::{ConsoleControl, ConsoleProtocolEvent};
 use super::console_session::{
     ConsoleEndpoint, ConsoleSession, ConsoleSettings, EchoSink, InputDisposition, InputEvent,
     OutputAttachment,
@@ -189,25 +190,39 @@ pub fn run<A: crate::Arch>(
     session.write_bytes(b"early> ");
 
     loop {
-        if let Some(byte) = crate::kernel::serial_console::try_read_byte() {
-            session.input(InputEvent::Byte(byte));
-            if let Some(action) = session.endpoint_mut().take_action() {
-                return match action {
-                    EarlyConsoleAction::Continue => {
-                        boot.clear_launch_cmdline();
-                        action
+        if let Some(event) = crate::kernel::serial_console::try_read_event() {
+            let input = match event {
+                ConsoleProtocolEvent::Control(ConsoleControl::Reboot) => machine.reboot(),
+                ConsoleProtocolEvent::Input(InputEvent::Byte(byte)) => Some(InputEvent::Byte(byte)),
+                ConsoleProtocolEvent::Input(InputEvent::Scancode(scancode)) => {
+                    if crate::kernel::keyboard::update_key_state(scancode) {
+                        let byte = crate::kernel::keyboard::scancode_to_ascii(scancode);
+                        (byte != 0).then_some(InputEvent::Byte(byte))
+                    } else {
+                        None
                     }
-                    EarlyConsoleAction::Exec => {
-                        if let Some(command) = session.endpoint_mut().exec_command() {
-                            boot.set_cmdline(command);
+                }
+            };
+            if let Some(input) = input {
+                session.input(input);
+                if let Some(action) = session.endpoint_mut().take_action() {
+                    return match action {
+                        EarlyConsoleAction::Continue => {
+                            boot.clear_launch_cmdline();
                             action
-                        } else {
-                            session.write_bytes(b"exec command was lost\r\n");
-                            continue;
                         }
-                    }
-                    EarlyConsoleAction::Reboot => machine.reboot(),
-                };
+                        EarlyConsoleAction::Exec => {
+                            if let Some(command) = session.endpoint_mut().exec_command() {
+                                boot.set_cmdline(command);
+                                action
+                            } else {
+                                session.write_bytes(b"exec command was lost\r\n");
+                                continue;
+                            }
+                        }
+                        EarlyConsoleAction::Reboot => machine.reboot(),
+                    };
+                }
             }
         }
         if let Some(crate::Irq::Key(scancode)) = poll_input()

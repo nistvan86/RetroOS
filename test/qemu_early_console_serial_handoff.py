@@ -1,15 +1,21 @@
 #!/usr/bin/env python3
-"""Verify serial early-console output and the return to ambient logging."""
+"""Exercise serial early-console handoff and reboot control frames."""
 
 from __future__ import annotations
+
+import sys
 
 from qemu_console_test import QemuSerialTest
 
 
-def main() -> int:
+def frame(payload: bytes) -> bytes:
+    escaped = payload.replace(b"\x10", b"\x10\x10")
+    return b"\x10\x02" + escaped + b"\x10\x03"
+
+
+def handoff() -> int:
     with QemuSerialTest() as qemu:
         qemu.read_until(b"early> ")
-
         qemu.send(b"help\r")
         qemu.read_until(b"commands: help info resume reboot")
         qemu.send(b"info\r")
@@ -17,10 +23,44 @@ def main() -> int:
         qemu.send(b"resume\r")
         qemu.read_until(b"Welcome to RetroOS!")
         qemu.read_until(b"Starting DN...")
-
         qemu.require(b"help\r\n", b"info\r\n", b"resume\r\n", b"early> resume")
     print("PASS: QEMU early-console serial handoff")
     return 0
+
+
+def reboot_early() -> int:
+    with QemuSerialTest(no_reboot=False) as qemu:
+        qemu.read_until(b"early> ")
+        qemu.send(frame(b"\x01"))  # REBOOT control command
+        qemu.read_until_count(b"RetroOS early console", 2)
+        qemu.require(b"type help for commands")
+    print("PASS: QEMU serial reboot from early console")
+    return 0
+
+
+def reboot_dn() -> int:
+    with QemuSerialTest(no_reboot=False) as qemu:
+        qemu.read_until(b"early> ")
+        qemu.send(b"resume\r")
+        qemu.read_until(b"Starting DN...")
+        qemu.send(frame(b"\x01"))  # REBOOT control command
+        qemu.read_until_count(b"RetroOS Rust Kernel", 2)
+        # The fw_cfg command line still requests earlyconsole after reset, so
+        # the restarted guest stops at the new early prompt again.
+        qemu.read_until_count(b"RetroOS early console", 2)
+    print("PASS: QEMU serial reboot with DOS personality")
+    return 0
+
+
+def main() -> int:
+    mode = sys.argv[1] if len(sys.argv) > 1 else "handoff"
+    if mode == "reboot-early":
+        return reboot_early()
+    if mode == "reboot-dos":
+        return reboot_dn()
+    if mode != "handoff":
+        raise SystemExit(f"unknown mode: {mode}")
+    return handoff()
 
 
 if __name__ == "__main__":

@@ -7,6 +7,7 @@
 use core::sync::atomic::{AtomicU8, Ordering};
 
 use arch_abi::ComPort;
+use crate::kernel::console_protocol::{ConsoleProtocolDecoder, ConsoleProtocolEvent};
 use crate::kernel::drivers::uart16550::Uart16550;
 
 const DISABLED: u8 = 0;
@@ -17,6 +18,7 @@ const FAILED: u8 = 4;
 
 static STATE: AtomicU8 = AtomicU8::new(DISABLED);
 static PORT: AtomicU8 = AtomicU8::new(0);
+static mut DECODER: ConsoleProtocolDecoder = ConsoleProtocolDecoder::new();
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SerialConsoleState {
@@ -49,6 +51,7 @@ pub fn init_log(port: ComPort) -> bool {
         return false;
     }
     PORT.store(encode(port), Ordering::Release);
+    unsafe { DECODER = ConsoleProtocolDecoder::new(); }
     STATE.store(POLLING_LOG, Ordering::Release);
     true
 }
@@ -90,7 +93,28 @@ pub fn detach_to_logging() {
     }
 }
 
-/// Poll one byte only while the early session owns serial input.
+/// Poll one decoded console event from the configured serial console.
+///
+/// Protocol controls are recognized in every live state, including
+/// `PollingLog`, so reboot does not depend on an attached personality.
+pub fn try_read_event() -> Option<ConsoleProtocolEvent> {
+    let state = STATE.load(Ordering::Acquire);
+    if state == DISABLED || state == FAILED {
+        return None;
+    }
+    let port = decode(PORT.load(Ordering::Acquire))?;
+    for _ in 0..64 {
+        let byte = Uart16550::new(port).try_read_byte()?;
+        let decoder = &raw mut DECODER;
+        let event = unsafe { (*decoder).feed(byte) };
+        if event.is_some() {
+            return event;
+        }
+    }
+    None
+}
+
+/// Compatibility helper for the early-console byte path.
 pub fn try_read_byte() -> Option<u8> {
     if STATE.load(Ordering::Acquire) != EARLY_SESSION {
         return None;

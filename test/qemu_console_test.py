@@ -10,8 +10,9 @@ import time
 
 
 class QemuSerialTest:
-    def __init__(self, cmdline: str = "serial=com1 earlyconsole") -> None:
+    def __init__(self, cmdline: str = "serial=com1 earlyconsole", no_reboot: bool = True):
         self.cmdline = cmdline
+        self.no_reboot = no_reboot
         self.output = bytearray()
         self._directory: tempfile.TemporaryDirectory[str] | None = None
         self._process: subprocess.Popen[bytes] | None = None
@@ -26,10 +27,11 @@ class QemuSerialTest:
             "-drive", "file=bazel-bin/image.bin,format=raw,snapshot=on",
             "-m", "64M",
             "-display", "none",
-            "-no-reboot",
             "-serial", f"unix:{serial_socket},server=on,wait=on",
             "-fw_cfg", f"name=opt/cmdline,string={self.cmdline}",
         ]
+        if self.no_reboot:
+            command.insert(command.index("-serial"), "-no-reboot")
         self._process = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         deadline = time.monotonic() + 15.0
         while time.monotonic() < deadline:
@@ -72,6 +74,23 @@ class QemuSerialTest:
             self.output.extend(chunk)
         if marker not in self.output:
             raise AssertionError(f"did not receive {marker!r}; got {bytes(self.output)!r}")
+
+    def read_until_count(self, marker: bytes, count: int) -> None:
+        if self._connection is None:
+            raise AssertionError("QEMU serial connection is not open")
+        deadline = time.monotonic() + 30.0
+        while self.output.count(marker) < count and time.monotonic() < deadline:
+            try:
+                chunk = self._connection.recv(4096)
+            except socket.timeout:
+                continue
+            if not chunk:
+                break
+            self.output.extend(chunk)
+        if self.output.count(marker) < count:
+            raise AssertionError(
+                f"did not receive {count} copies of {marker!r}; got {bytes(self.output)!r}"
+            )
 
     def send(self, data: bytes) -> None:
         if self._connection is None:
