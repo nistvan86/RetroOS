@@ -18,19 +18,26 @@ pub fn parse_key_value(token: &[u8]) -> Option<(&[u8], &[u8])> {
     Some((&token[..eq], &token[eq + 1..]))
 }
 
-/// Visit every key/value token without assigning meaning to its key.
-pub fn for_each_key_value(mut input: &[u8], mut visit: impl FnMut(&[u8], &[u8])) {
+/// Visit every non-empty whitespace- or semicolon-separated token.
+pub fn for_each_token(mut input: &[u8], mut visit: impl FnMut(&[u8])) {
     while !input.is_empty() {
-        let split = input.iter().position(|b| b.is_ascii_whitespace() || *b == b';');
-        let (token, rest) = match split {
-            Some(index) => (&input[..index], &input[index + 1..]),
-            None => (input, &[][..]),
-        };
+        let start = input.iter().position(|b| !b.is_ascii_whitespace() && *b != b';');
+        let Some(start) = start else { return };
+        input = &input[start..];
+        let end = input.iter().position(|b| b.is_ascii_whitespace() || *b == b';')
+            .unwrap_or(input.len());
+        visit(&input[..end]);
+        input = &input[end..];
+    }
+}
+
+/// Visit every key/value token without assigning meaning to its key.
+pub fn for_each_key_value(input: &[u8], mut visit: impl FnMut(&[u8], &[u8])) {
+    for_each_token(input, |token| {
         if let Some((key, value)) = parse_key_value(token) {
             visit(key, value);
         }
-        input = rest;
-    }
+    });
 }
 
 /// Split non-empty semicolon-separated launch segments after trimming ASCII
@@ -133,7 +140,7 @@ fn trim_ascii(s: &[u8]) -> &[u8] {
 
 #[cfg(test)]
 mod tests {
-    use super::{eq_ignore_ascii_case, for_each_key_value, key_eq, launch, parse_key_value, segments};
+    use super::{eq_ignore_ascii_case, for_each_key_value, for_each_token, key_eq, launch, parse_key_value, segments};
 
     fn hostfs_directive(key: &[u8]) -> bool { key_eq(key, b"hostfs") }
 
@@ -162,6 +169,17 @@ mod tests {
         assert_eq!(count, 2);
         assert_eq!(found[0], b"hostfs=com1");
         assert_eq!(found[1], b"TESTS/X.COM arg=one");
+    }
+
+    #[test]
+    fn visits_all_tokens_including_bare_directives() {
+        let expected = [b"TESTS/X.COM".as_slice(), b"earlyconsole", b"serial=com1"];
+        let mut count = 0;
+        for_each_token(b"TESTS/X.COM; earlyconsole serial=com1", |token| {
+            assert_eq!(token, expected[count]);
+            count += 1;
+        });
+        assert_eq!(count, expected.len());
     }
 
     #[test]

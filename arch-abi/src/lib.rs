@@ -136,6 +136,8 @@ pub struct BootConfig {
     pub hostfs_port: Option<ComPort>,
     /// Optional kernel serial-console port. `None` leaves UART logging disabled.
     pub serial_console_port: Option<ComPort>,
+    /// Stop after minimum console initialization and enter the kernel early console.
+    pub early_console: bool,
     /// Loader-supplied Multiboot module images. Hosted entries leave these empty.
     pub boot_modules: [Option<BootModule>; MAX_BOOT_MODULES],
     /// Metal's temporary physical-memory reader. Hosted entries leave this empty.
@@ -152,6 +154,7 @@ impl BootConfig {
             ram_overlay: false,
             hostfs_port: None,
             serial_console_port: None,
+            early_console: false,
             boot_modules: [None; MAX_BOOT_MODULES],
             boot_physical_reader: None,
         };
@@ -182,9 +185,19 @@ impl BootConfig {
         });
     }
 
+    /// Apply boot directives that are meaningful before normal startup.
+    pub fn set_boot_directives_from_cmdline(&mut self, s: &[u8]) {
+        self.set_serial_services_from_cmdline(s);
+        cmdline::for_each_token(s, |token| {
+            if cmdline::key_eq(token, b"earlyconsole") {
+                self.early_console = true;
+            }
+        });
+    }
+
     /// Record the headless command line (semicolon-separated program list).
     pub fn set_cmdline(&mut self, s: &[u8]) {
-        self.set_serial_services_from_cmdline(s);
+        self.set_boot_directives_from_cmdline(s);
         let n = s.len().min(self.cmdline.len());
         self.cmdline[..n].copy_from_slice(&s[..n]);
         self.cmdline_len = Some(n);
@@ -217,6 +230,27 @@ impl BootConfig {
 #[cfg(test)]
 mod boot_config_tests {
     use super::{BootConfig, ComPort};
+
+    #[test]
+    fn early_console_is_off_by_default() {
+        assert!(!BootConfig::empty().early_console);
+    }
+
+    #[test]
+    fn early_console_directive_is_case_insensitive() {
+        let mut config = BootConfig::empty();
+        config.set_cmdline(b"EARLYCONSOLE serial=com1");
+        assert!(config.early_console);
+        assert_eq!(config.serial_console_port, Some(ComPort::Com1));
+    }
+
+    #[test]
+    fn early_console_preserves_program_command_line() {
+        let mut config = BootConfig::empty();
+        config.set_cmdline(b"earlyconsole;TESTS/X.COM arg");
+        assert!(config.early_console);
+        assert_eq!(config.cmdline(), Some(&b"earlyconsole;TESTS/X.COM arg"[..]));
+    }
 
     #[test]
     fn hostfs_directives_are_case_insensitive_and_last_valid_wins() {
