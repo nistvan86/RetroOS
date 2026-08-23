@@ -96,6 +96,17 @@ fn write_bytes(out: &mut dyn EchoSink, bytes: &[u8]) {
     }
 }
 
+/// Stop before ring 1 and normal startup while proving the shared early output
+/// path is usable. Stage 4 replaces this halt with the polling command loop.
+pub fn run_output_only(screen: &mut lib::term::Term) -> ! {
+    use core::fmt::Write;
+    let _ = writeln!(screen, "RetroOS early console");
+    let _ = writeln!(screen, "Input is not enabled yet");
+    loop {
+        core::hint::spin_loop();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use alloc::vec::Vec;

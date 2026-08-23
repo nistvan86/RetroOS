@@ -253,6 +253,10 @@ pub unsafe extern "C" fn boot_kernel(magic: u32, info: *const arch::MultibootInf
     irq::init_interrupts();
     lib::screenln!(screen, "Interrupts initialized");
 
+    if config.early_console {
+        crate::kernel::early_console::run_output_only(screen);
+    }
+
     // The compat-mode switch was a test harness to force the experimental
     // x64/long-mode path — the kernel normally runs PAE 32-bit. On a real CPU
     // (KVM/metal) it switches to long mode and the first IRQ through the 64-bit
