@@ -43,10 +43,10 @@ esac
 
 grep -aFq 'RetroOS early console' "$serial_log"
 test "$(grep -aFc 'RetroOS early console' "$serial_log")" -eq 1
-grep -aFq 'Input is not enabled yet' "$serial_log"
 test "$(grep -aFc 'Block devices initialized' "$serial_log")" -eq 0
 
-grep -aFq 'RetroOS early console' "$debug_log"
-test "$(grep -aFc 'RetroOS early console' "$debug_log")" -eq 1
+# Attached-session output is direct to the serial session; it must not also be
+# emitted through the ambient debugcon mirror.
+test "$(grep -aFc 'RetroOS early console' "$debug_log")" -eq 0
 
 echo "PASS: QEMU early console"

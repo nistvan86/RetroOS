@@ -118,6 +118,10 @@ where
         }
     }
 
+    pub fn endpoint_mut(&mut self) -> &mut E {
+        self.endpoint
+    }
+
     pub fn settings(&self) -> ConsoleSettings {
         self.settings
     }

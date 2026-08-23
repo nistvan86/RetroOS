@@ -162,7 +162,7 @@ pub unsafe extern "C" fn boot_kernel(magic: u32, info: *const arch::MultibootInf
     // and this read needs neither the heap nor interrupts.
     let mut config = read_boot_config(&boot_cmdline[..boot_cmdline_len]);
     if let Some(port) = config.serial_console_port {
-        if crate::kernel::serial_log::init(port) {
+        if crate::kernel::serial_console::init_log(port) {
             crate::println!("serial: {:?} logging enabled at 115200 8N1", port);
         } else {
             crate::println!("serial: {:?} unavailable", port);
@@ -254,7 +254,12 @@ pub unsafe extern "C" fn boot_kernel(magic: u32, info: *const arch::MultibootInf
     lib::screenln!(screen, "Interrupts initialized");
 
     if config.early_console {
-        crate::kernel::early_console::run_output_only(screen);
+        match crate::kernel::early_console::run(screen, arch::shutdown) {
+            crate::kernel::early_console::EarlyConsoleAction::Continue => {
+                crate::kernel::serial_console::detach_to_logging();
+            }
+            crate::kernel::early_console::EarlyConsoleAction::Reboot => unreachable!(),
+        }
     }
 
     // The compat-mode switch was a test harness to force the experimental

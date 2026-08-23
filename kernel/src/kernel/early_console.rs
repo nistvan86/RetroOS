@@ -1,6 +1,9 @@
 //! Allocation-free command endpoint for the kernel-owned early console.
 
-use super::console_session::{ConsoleEndpoint, EchoSink, InputDisposition, InputEvent};
+use super::console_session::{
+    ConsoleEndpoint, ConsoleSession, ConsoleSettings, EchoSink, InputDisposition, InputEvent,
+    OutputAttachment,
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum EarlyConsoleAction {
@@ -11,11 +14,12 @@ pub enum EarlyConsoleAction {
 pub struct EarlyConsole {
     line: [u8; 64],
     len: usize,
+    pending_action: Option<EarlyConsoleAction>,
 }
 
 impl EarlyConsole {
     pub const fn new() -> Self {
-        Self { line: [0; 64], len: 0 }
+        Self { line: [0; 64], len: 0, pending_action: None }
     }
 
     pub fn prompt(&self, out: &mut dyn EchoSink) {
@@ -72,6 +76,10 @@ impl EarlyConsole {
             _ => write_bytes(out, b"unknown command\r\n"),
         }
     }
+
+    pub fn take_action(&mut self) -> Option<EarlyConsoleAction> {
+        self.pending_action.take()
+    }
 }
 
 impl Default for EarlyConsole {
@@ -85,9 +93,10 @@ impl ConsoleEndpoint for EarlyConsole {
         let InputEvent::Byte(byte) = event else {
             return InputDisposition::Ignored;
         };
-        self.accept(byte, echo);
+        self.pending_action = self.accept(byte, echo);
         InputDisposition::Consumed
     }
+
 }
 
 fn write_bytes(out: &mut dyn EchoSink, bytes: &[u8]) {
@@ -96,13 +105,49 @@ fn write_bytes(out: &mut dyn EchoSink, bytes: &[u8]) {
     }
 }
 
-/// Stop before ring 1 and normal startup while proving the shared early output
-/// path is usable. Stage 4 replaces this halt with the polling command loop.
-pub fn run_output_only(screen: &mut lib::term::Term) -> ! {
-    use core::fmt::Write;
-    let _ = writeln!(screen, "RetroOS early console");
-    let _ = writeln!(screen, "Input is not enabled yet");
+struct VideoOutput<'a>(&'a mut lib::term::Term);
+
+impl OutputAttachment for VideoOutput<'_> {
+    fn write_byte(&mut self, byte: u8) {
+        self.0.putchar(byte);
+        crate::kernel::term::mark_dirty();
+    }
+}
+
+struct SerialOutput;
+
+impl OutputAttachment for SerialOutput {
+    fn write_byte(&mut self, byte: u8) {
+        crate::kernel::serial_log::write_byte(byte);
+    }
+}
+
+/// Run the early command loop before ring 1 and normal startup.
+pub fn run(screen: &mut lib::term::Term, reboot: fn() -> !) -> EarlyConsoleAction {
+    let serial_attached = crate::kernel::serial_console::attach_early();
+    let mut endpoint = EarlyConsole::new();
+    let mut video = VideoOutput(screen);
+    let mut serial = SerialOutput;
+    let mut session = ConsoleSession::new(
+        &mut endpoint,
+        &mut video,
+        serial_attached.then_some(&mut serial),
+        ConsoleSettings::default(),
+    );
+    session.write_bytes(b"RetroOS early console\r\n");
+    session.write_bytes(b"type help for commands\r\n");
+    session.write_bytes(b"early> ");
+
     loop {
+        if let Some(byte) = crate::kernel::serial_console::try_read_byte() {
+            session.input(InputEvent::Byte(byte));
+            if let Some(action) = session.endpoint_mut().take_action() {
+                return match action {
+                    EarlyConsoleAction::Continue => action,
+                    EarlyConsoleAction::Reboot => reboot(),
+                };
+            }
+        }
         core::hint::spin_loop();
     }
 }

@@ -97,6 +97,15 @@ impl Uart16550 {
         Ok(inb(self.base()))
     }
 
+    /// Receive one byte without waiting. This is the bounded polling primitive
+    /// used by the pre-scheduler serial console.
+    pub fn try_read_byte(self) -> Option<u8> {
+        if inb(self.base() + 5) & 0x01 == 0 {
+            return None;
+        }
+        Some(inb(self.base()))
+    }
+
     /// Discard bytes already buffered by the UART.
     pub fn drain_rx(self) {
         while inb(self.base() + 5) & 0x01 != 0 {
