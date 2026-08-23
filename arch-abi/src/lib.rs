@@ -195,6 +195,11 @@ impl BootConfig {
         });
     }
 
+    /// Clear the pending launch command so normal interactive startup is used.
+    pub fn clear_launch_cmdline(&mut self) {
+        self.cmdline_len = None;
+    }
+
     /// Record the headless command line (semicolon-separated program list).
     pub fn set_cmdline(&mut self, s: &[u8]) {
         self.set_boot_directives_from_cmdline(s);
@@ -250,6 +255,26 @@ mod boot_config_tests {
         config.set_cmdline(b"earlyconsole;TESTS/X.COM arg");
         assert!(config.early_console);
         assert_eq!(config.cmdline(), Some(&b"earlyconsole;TESTS/X.COM arg"[..]));
+    }
+
+    #[test]
+    fn launch_override_preserves_serial_service_assignments() {
+        let mut config = BootConfig::empty();
+        config.set_cmdline(b"hostfs=com1 serial=com2 earlyconsole");
+        config.set_cmdline(b"TESTS/X.COM arg");
+        assert_eq!(config.hostfs_port, Some(ComPort::Com1));
+        assert_eq!(config.serial_console_port, Some(ComPort::Com2));
+        assert_eq!(config.cmdline(), Some(&b"TESTS/X.COM arg"[..]));
+    }
+
+    #[test]
+    fn clearing_launch_cmdline_preserves_serial_service_assignments() {
+        let mut config = BootConfig::empty();
+        config.set_cmdline(b"hostfs=com1 serial=com2 earlyconsole");
+        config.clear_launch_cmdline();
+        assert_eq!(config.cmdline(), None);
+        assert_eq!(config.hostfs_port, Some(ComPort::Com1));
+        assert_eq!(config.serial_console_port, Some(ComPort::Com2));
     }
 
     #[test]

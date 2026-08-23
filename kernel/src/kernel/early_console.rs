@@ -8,18 +8,29 @@ use super::console_session::{
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum EarlyConsoleAction {
     Continue,
+    Exec,
     Reboot,
 }
 
 pub struct EarlyConsole {
-    line: [u8; 64],
+    line: [u8; 256],
     len: usize,
+    overflowed: bool,
+    exec: [u8; 256],
+    exec_len: usize,
     pending_action: Option<EarlyConsoleAction>,
 }
 
 impl EarlyConsole {
     pub const fn new() -> Self {
-        Self { line: [0; 64], len: 0, pending_action: None }
+        Self {
+            line: [0; 256],
+            len: 0,
+            overflowed: false,
+            exec: [0; 256],
+            exec_len: 0,
+            pending_action: None,
+        }
     }
 
     pub fn prompt(&self, out: &mut dyn EchoSink) {
@@ -37,6 +48,7 @@ impl EarlyConsole {
                     self.prompt(out);
                 }
                 self.len = 0;
+                self.overflowed = false;
                 action
             }
             0x08 | 0x7f if self.len != 0 => {
@@ -50,11 +62,18 @@ impl EarlyConsole {
                 out.write_byte(byte);
                 None
             }
+            0x20..=0x7e => {
+                self.overflowed = true;
+                None
+            }
             _ => None,
         }
     }
 
-    fn command(&self) -> Option<EarlyConsoleAction> {
+    fn command(&mut self) -> Option<EarlyConsoleAction> {
+        if self.overflowed {
+            return None;
+        }
         let command = &self.line[..self.len];
         if command == b"resume" {
             return Some(EarlyConsoleAction::Continue);
@@ -62,19 +81,35 @@ impl EarlyConsole {
         if command == b"reboot" {
             return Some(EarlyConsoleAction::Reboot);
         }
-        if command == b"help" {
-            return None;
+        if command.len() > 5 && &command[..5] == b"exec " {
+            let path = &command[5..];
+            if !path.is_empty() && path.len() <= self.exec.len() {
+                self.exec[..path.len()].copy_from_slice(path);
+                self.exec_len = path.len();
+                return Some(EarlyConsoleAction::Exec);
+            }
         }
         None
     }
 
     fn write_command_result(&self, out: &mut dyn EchoSink) {
+        if self.overflowed {
+            write_bytes(out, b"command too long\r\n");
+            return;
+        }
         match &self.line[..self.len] {
-            b"help" => write_bytes(out, b"commands: help info resume reboot\r\n"),
+            b"help" => write_bytes(out, b"commands: help info resume reboot exec <path> [args]\r\n"),
             b"info" => write_bytes(out, b"early console: paging active\r\n"),
             b"resume" | b"reboot" => {}
+            command if command.starts_with(b"exec ") => {
+                write_bytes(out, b"exec requires a non-empty path\r\n");
+            }
             _ => write_bytes(out, b"unknown command\r\n"),
         }
+    }
+
+    pub fn exec_command(&self) -> Option<&[u8]> {
+        (self.exec_len != 0).then_some(&self.exec[..self.exec_len])
     }
 
     pub fn take_action(&mut self) -> Option<EarlyConsoleAction> {
@@ -123,7 +158,11 @@ impl OutputAttachment for SerialOutput {
 }
 
 /// Run the early command loop before ring 1 and normal startup.
-pub fn run(screen: &mut lib::term::Term, reboot: fn() -> !) -> EarlyConsoleAction {
+pub fn run(
+    screen: &mut lib::term::Term,
+    boot: &mut crate::BootConfig,
+    reboot: fn() -> !,
+) -> EarlyConsoleAction {
     let serial_attached = crate::kernel::serial_console::attach_early();
     let mut endpoint = EarlyConsole::new();
     let mut video = VideoOutput(screen);
@@ -143,7 +182,19 @@ pub fn run(screen: &mut lib::term::Term, reboot: fn() -> !) -> EarlyConsoleActio
             session.input(InputEvent::Byte(byte));
             if let Some(action) = session.endpoint_mut().take_action() {
                 return match action {
-                    EarlyConsoleAction::Continue => action,
+                    EarlyConsoleAction::Continue => {
+                        boot.clear_launch_cmdline();
+                        action
+                    }
+                    EarlyConsoleAction::Exec => {
+                        if let Some(command) = session.endpoint_mut().exec_command() {
+                            boot.set_cmdline(command);
+                            action
+                        } else {
+                            session.write_bytes(b"exec command was lost\r\n");
+                            continue;
+                        }
+                    }
                     EarlyConsoleAction::Reboot => reboot(),
                 };
             }
@@ -180,7 +231,7 @@ mod tests {
     fn echoes_line_and_help_response() {
         let mut console = EarlyConsole::new();
         let (output, _) = send(&mut console, b"help\r");
-        assert_eq!(output, b"help\r\ncommands: help info resume reboot\r\nearly> ");
+        assert_eq!(output, b"help\r\ncommands: help info resume reboot exec <path> [args]\r\nearly> ");
     }
 
     #[test]
@@ -188,6 +239,34 @@ mod tests {
         let mut console = EarlyConsole::new();
         let (output, _) = send(&mut console, b"helo\x08p\r");
         assert!(output.starts_with(b"helo\x08 \x08p\r\n"));
+    }
+
+    #[test]
+    fn exec_preserves_path_and_arguments() {
+        let mut console = EarlyConsole::new();
+        let (_, action) = send(&mut console, b"exec TESTS/X.COM arg\r");
+        assert_eq!(action, Some(EarlyConsoleAction::Exec));
+        assert_eq!(console.exec_command(), Some(&b"TESTS/X.COM arg"[..]));
+    }
+
+    #[test]
+    fn exec_without_path_is_rejected() {
+        let mut console = EarlyConsole::new();
+        let (output, action) = send(&mut console, b"exec \r");
+        assert_eq!(action, None);
+        assert!(output.windows(b"exec requires a non-empty path".len())
+            .any(|window| window == b"exec requires a non-empty path"));
+    }
+
+    #[test]
+    fn overlong_command_is_rejected() {
+        let mut console = EarlyConsole::new();
+        let mut input = [b'a'; 258];
+        input[257] = b'\r';
+        let (output, action) = send(&mut console, &input);
+        assert_eq!(action, None);
+        assert!(output.windows(b"command too long".len())
+            .any(|window| window == b"command too long"));
     }
 
     #[test]

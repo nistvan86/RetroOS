@@ -26,6 +26,7 @@ def read_until(sock: socket.socket, marker: bytes, data: bytearray) -> None:
 
 
 def main() -> int:
+    exec_mode = len(sys.argv) > 1 and sys.argv[1] == "exec"
     with tempfile.TemporaryDirectory(prefix="retroos-qemu-early-input-") as directory:
         serial_socket = os.path.join(directory, "serial.sock")
         debug_log = os.path.join(directory, "debug.log")
@@ -66,10 +67,18 @@ def main() -> int:
                 if b"help\r\n" not in output:
                     raise AssertionError(f"input was not echoed: {bytes(output)!r}")
 
-                connection.sendall(b"resume\r")
-                read_until(connection, b"Block devices initialized", output)
-                if b"Ring1 entered" not in output:
-                    raise AssertionError(f"normal boot did not resume: {bytes(output)!r}")
+                if exec_mode:
+                    connection.sendall(b"exec TESTS/SBTEST.COM\r")
+                    read_until(connection, b"BUSY-OK", output)
+                    if b"Starting TESTS/SBTEST.COM" not in output:
+                        raise AssertionError(f"selected executable did not start: {bytes(output)!r}")
+                    if b"Starting DN" in output:
+                        raise AssertionError(f"default DN path was selected: {bytes(output)!r}")
+                else:
+                    connection.sendall(b"resume\r")
+                    read_until(connection, b"Block devices initialized", output)
+                    if b"Ring1 entered" not in output:
+                        raise AssertionError(f"normal boot did not resume: {bytes(output)!r}")
         finally:
             process.terminate()
             try:
@@ -78,7 +87,7 @@ def main() -> int:
                 process.kill()
                 process.wait(timeout=5)
 
-    print("PASS: QEMU early-console input")
+    print("PASS: QEMU early-console exec" if exec_mode else "PASS: QEMU early-console input")
     return 0
 
 

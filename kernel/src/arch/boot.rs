@@ -254,8 +254,9 @@ pub unsafe extern "C" fn boot_kernel(magic: u32, info: *const arch::MultibootInf
     lib::screenln!(screen, "Interrupts initialized");
 
     if config.early_console {
-        match crate::kernel::early_console::run(screen, arch::shutdown) {
-            crate::kernel::early_console::EarlyConsoleAction::Continue => {
+        match crate::kernel::early_console::run(screen, &mut config, arch::shutdown) {
+            crate::kernel::early_console::EarlyConsoleAction::Continue
+            | crate::kernel::early_console::EarlyConsoleAction::Exec => {
                 crate::kernel::serial_console::detach_to_logging();
             }
             crate::kernel::early_console::EarlyConsoleAction::Reboot => unreachable!(),
