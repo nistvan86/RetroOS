@@ -12,6 +12,7 @@ use crate::kernel::drivers::uart16550::Uart16550;
 const DISABLED: u8 = 0;
 const POLLING_LOG: u8 = 1;
 const EARLY_SESSION: u8 = 2;
+const PERSONALITY_SESSION: u8 = 3;
 const FAILED: u8 = 4;
 
 static STATE: AtomicU8 = AtomicU8::new(DISABLED);
@@ -65,9 +66,26 @@ pub fn attach_early() -> bool {
     ).is_ok()
 }
 
+/// Attach the configured serial input/output to a personality session.
+///
+/// A session must first detach to `PollingLog`; direct session-to-session
+/// replacement is intentionally rejected.
+pub fn attach_personality() -> bool {
+    if PORT.load(Ordering::Acquire) == 0 {
+        return false;
+    }
+    STATE.compare_exchange(
+        POLLING_LOG,
+        PERSONALITY_SESSION,
+        Ordering::AcqRel,
+        Ordering::Acquire,
+    ).is_ok()
+}
+
 /// Return to ambient kernel logging while no interactive session owns serial.
 pub fn detach_to_logging() {
-    if STATE.load(Ordering::Acquire) == EARLY_SESSION {
+    let state = STATE.load(Ordering::Acquire);
+    if state == EARLY_SESSION || state == PERSONALITY_SESSION {
         STATE.store(POLLING_LOG, Ordering::Release);
     }
 }
@@ -85,6 +103,7 @@ pub fn state() -> SerialConsoleState {
     match STATE.load(Ordering::Acquire) {
         POLLING_LOG => SerialConsoleState::PollingLog,
         EARLY_SESSION => SerialConsoleState::EarlySession,
+        PERSONALITY_SESSION => SerialConsoleState::PersonalitySession,
         FAILED => SerialConsoleState::Failed,
         _ => SerialConsoleState::Disabled,
     }
@@ -92,11 +111,30 @@ pub fn state() -> SerialConsoleState {
 
 #[cfg(test)]
 mod tests {
-    use super::{SerialConsoleState, STATE, DISABLED};
+    use super::{
+        attach_early, attach_personality, detach_to_logging, SerialConsoleState, STATE, DISABLED,
+        POLLING_LOG,
+    };
+    use core::sync::atomic::Ordering;
 
     #[test]
     fn starts_disabled() {
-        STATE.store(DISABLED, core::sync::atomic::Ordering::Release);
+        STATE.store(DISABLED, Ordering::Release);
         assert_eq!(super::state(), SerialConsoleState::Disabled);
+    }
+
+    #[test]
+    fn session_handoffs_return_to_logging_before_replacement() {
+        super::PORT.store(1, Ordering::Release);
+        STATE.store(POLLING_LOG, Ordering::Release);
+        assert!(attach_early());
+        assert_eq!(super::state(), SerialConsoleState::EarlySession);
+        assert!(!attach_personality());
+        detach_to_logging();
+        assert_eq!(super::state(), SerialConsoleState::PollingLog);
+        assert!(attach_personality());
+        assert_eq!(super::state(), SerialConsoleState::PersonalitySession);
+        detach_to_logging();
+        assert_eq!(super::state(), SerialConsoleState::PollingLog);
     }
 }
