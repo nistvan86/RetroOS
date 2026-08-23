@@ -115,4 +115,28 @@ mod tests {
         let (out, len) = collect(b"\r\n");
         assert_eq!(&out[..len], b"\r\n");
     }
+
+    #[test]
+    fn translates_only_lone_newlines_in_a_stream() {
+        let (out, len) = collect(b"a\nb\r\nc");
+        assert_eq!(&out[..len], b"a\r\nb\r\nc");
+    }
+
+    #[test]
+    fn retains_cr_state_between_writes() {
+        let mut out = [0u8; 4];
+        let mut len = 0;
+        let mut previous_was_cr = false;
+        assert!(present_byte(b'\r', &mut previous_was_cr, |byte| {
+            out[len] = byte;
+            len += 1;
+            true
+        }));
+        assert!(present_byte(b'\n', &mut previous_was_cr, |byte| {
+            out[len] = byte;
+            len += 1;
+            true
+        }));
+        assert_eq!(&out[..len], b"\r\n");
+    }
 }
