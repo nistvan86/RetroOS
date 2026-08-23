@@ -213,6 +213,12 @@ impl Term {
             b'\r' => {
                 self.cursor_x = 0;
             }
+            // Backspace is a cursor-control byte, not a printable VGA glyph.
+            // This lets the conventional "\\b \\b" erase sequence used by
+            // console line editors work identically on VGA and serial output.
+            0x08 => {
+                self.cursor_x = self.cursor_x.saturating_sub(1);
+            }
             _ => {
                 let offset = self.cursor_y * WIDTH + self.cursor_x;
                 self.put_cell(offset, (self.attr as u16) << 8 | (c as u16));
@@ -311,4 +317,25 @@ macro_rules! screenln {
         use core::fmt::Write;
         let _ = ::core::writeln!($screen, $($arg)*);
     }};
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Term;
+
+    #[test]
+    fn backspace_erase_sequence_does_not_draw_control_glyphs() {
+        let mut term = Term::new(None);
+        term.putchar(b'a');
+        term.putchar(b'b');
+        term.putchar(b'c');
+        term.putchar(0x08);
+        term.putchar(b' ');
+        term.putchar(0x08);
+
+        assert_eq!(term.cursor_pos(), (2, 0));
+        assert_eq!(term.cells()[0] & 0xFF, b'a' as u16);
+        assert_eq!(term.cells()[1] & 0xFF, b'b' as u16);
+        assert_eq!(term.cells()[2] & 0xFF, b' ' as u16);
+    }
 }
