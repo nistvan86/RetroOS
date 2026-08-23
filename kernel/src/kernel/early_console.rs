@@ -140,12 +140,17 @@ fn write_bytes(out: &mut dyn EchoSink, bytes: &[u8]) {
     }
 }
 
-struct VideoOutput<'a>(&'a mut lib::term::Term);
+struct VideoOutput<'a> {
+    screen: &'a mut lib::term::Term,
+    sync_cursor: fn(usize, usize),
+}
 
 impl OutputAttachment for VideoOutput<'_> {
     fn write_byte(&mut self, byte: u8) {
-        self.0.putchar(byte);
+        self.screen.putchar(byte);
         crate::kernel::term::mark_dirty();
+        let (column, row) = self.screen.cursor_pos();
+        (self.sync_cursor)(column, row);
     }
 }
 
@@ -157,15 +162,21 @@ impl OutputAttachment for SerialOutput {
     }
 }
 
-/// Run the early command loop before ring 1 and normal startup.
-pub fn run(
+/// Run the early command loop before normal personality startup.
+///
+/// Input is sourced from the backend's existing local-input path and from the
+/// optional serial console. Both are immediately translated into the same
+/// endpoint; no early-console queue is introduced.
+pub fn run<A: crate::Arch>(
+    machine: &mut A,
     screen: &mut lib::term::Term,
     boot: &mut crate::BootConfig,
-    reboot: fn() -> !,
+    poll_input: fn() -> Option<crate::Irq>,
+    sync_cursor: fn(usize, usize),
 ) -> EarlyConsoleAction {
     let serial_attached = crate::kernel::serial_console::attach_early();
     let mut endpoint = EarlyConsole::new();
-    let mut video = VideoOutput(screen);
+    let mut video = VideoOutput { screen, sync_cursor };
     let mut serial = SerialOutput;
     let mut session = ConsoleSession::new(
         &mut endpoint,
@@ -195,8 +206,34 @@ pub fn run(
                             continue;
                         }
                     }
-                    EarlyConsoleAction::Reboot => reboot(),
+                    EarlyConsoleAction::Reboot => machine.reboot(),
                 };
+            }
+        }
+        if let Some(crate::Irq::Key(scancode)) = poll_input()
+            && crate::kernel::keyboard::update_key_state(scancode)
+        {
+            let byte = crate::kernel::keyboard::scancode_to_ascii(scancode);
+            if byte != 0 {
+                session.input(InputEvent::Byte(byte));
+                if let Some(action) = session.endpoint_mut().take_action() {
+                    return match action {
+                        EarlyConsoleAction::Continue => {
+                            boot.clear_launch_cmdline();
+                            action
+                        }
+                        EarlyConsoleAction::Exec => {
+                            if let Some(command) = session.endpoint_mut().exec_command() {
+                                boot.set_cmdline(command);
+                                action
+                            } else {
+                                session.write_bytes(b"exec command was lost\r\n");
+                                continue;
+                            }
+                        }
+                        EarlyConsoleAction::Reboot => machine.reboot(),
+                    };
+                }
             }
         }
         core::hint::spin_loop();

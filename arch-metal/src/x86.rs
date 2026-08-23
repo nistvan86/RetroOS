@@ -506,6 +506,21 @@ pub fn shutdown() -> ! {
     crate::halt_forever()
 }
 
+/// Request a hardware reset through the 8042 controller. This is the standard
+/// reset path on the PC machines RetroOS targets; if no controller responds,
+/// the fallback keeps the machine stopped instead of continuing in a damaged
+/// state.
+pub fn reboot() -> ! {
+    cli();
+    for _ in 0..100_000 {
+        if inb(0x64) & 0x02 == 0 {
+            outb(0x64, 0xFE);
+            break;
+        }
+    }
+    crate::halt_forever()
+}
+
 /// GDT pointer structure
 #[repr(C, packed)]
 pub struct GdtPtr {

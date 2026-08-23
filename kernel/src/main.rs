@@ -212,7 +212,12 @@ fn main() {
     let mut machine = arch::Interp;
     // Hosted has no display to arbitrate until `startup` builds a Console;
     // mirroring the metal boot_kernel — one per boot, moved into startup.
-    kernel::startup(&mut machine, &config);
+    kernel::startup(
+            &mut machine,
+            &mut config,
+            arch::early_console_input,
+            arch::early_console_cursor,
+        );
 }
 
 /// Inject the interp backend into the backend-agnostic kernel: its port I/O

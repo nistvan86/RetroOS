@@ -72,6 +72,7 @@ impl Arch for Metal {
     // ── Timer ──
     fn now(&self) -> u64 { super::irq::now(false) }
     fn drain(&mut self, f: &mut dyn FnMut(Irq)) { super::irq::drain(f) }
+
     fn rdtsc(&self) -> u64 { super::x86::rdtsc() }
 
     // ── IRQ lines ──
@@ -134,6 +135,7 @@ impl Arch for Metal {
     // ── Diagnostics & power ──
     fn free_page_count(&self) -> usize { super::phys_mm::free_page_count() }
     fn shutdown(&mut self) -> ! { super::x86::shutdown() }
+    fn reboot(&mut self) -> ! { super::x86::reboot() }
     fn halt_forever(&mut self) -> ! { super::halt_forever() }
 
     // ── x86 descriptor resolution (associated fns — ambient GDT/LDT) ──

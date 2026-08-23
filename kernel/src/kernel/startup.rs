@@ -12,7 +12,12 @@ use crate::kernel::{
 /// Startup: the kernel's ordered init spine — probe, then derive, then run.
 /// Each phase is a named function below; this stays short enough to read as
 /// the boot story. Called from enter_ring1 — we are already at ring 1.
-pub fn startup<A: crate::Arch>(machine: &mut A, boot: &crate::BootConfig) -> ! {
+pub fn startup<A: crate::Arch>(
+    machine: &mut A,
+    boot: &mut crate::BootConfig,
+    poll_input: fn() -> Option<crate::Irq>,
+    sync_cursor: fn(usize, usize),
+) -> ! {
     // The global allocator is installed by the binary glue before startup runs
     // (metal: `arch/boot.rs`; hosted: std), so heap-using code is safe here on.
 
@@ -58,6 +63,32 @@ pub fn startup<A: crate::Arch>(machine: &mut A, boot: &crate::BootConfig) -> ! {
         Err(display) => display,
     };
     let mut screen = crate::kernel::console::Console::new(display);
+
+    // Hosted and play enter through this common startup spine. Run the same
+    // backend-neutral early console before personality selection; its local
+    // input comes from the existing interp IRQ queue (stdin or SDL).
+    if boot.early_console {
+        match crate::kernel::early_console::run(
+                    machine,
+                    lib::term::term(),
+                    boot,
+                    poll_input,
+                    sync_cursor,
+                ) {
+            crate::kernel::early_console::EarlyConsoleAction::Continue
+            | crate::kernel::early_console::EarlyConsoleAction::Exec => {
+                crate::kernel::serial_console::detach_to_logging();
+            }
+            crate::kernel::early_console::EarlyConsoleAction::Reboot => unreachable!(),
+        }
+        // This is a one-shot boot directive; otherwise a metal boot that
+        // already stopped before ring 1 would enter the same console again.
+        boot.early_console = false;
+        // Publish the shared terminal grid before normal startup resumes.
+        // This is a no-op for headless displays and the normal frame path for
+        // interp/play surfaces.
+        screen.present(machine, &mut bios_workspace);
+    }
 
     // Disk-write policy, applied by COMPOSITION and DECLARED, never inferred.
     //

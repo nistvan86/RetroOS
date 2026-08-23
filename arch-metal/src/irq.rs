@@ -128,6 +128,44 @@ pub fn push_key(sc: u8) {
     unsafe { (*q).push(Irq::Key(sc)); }
 }
 
+/// Remove one queued key event for the pre-scheduler early console.
+///
+/// The early console has no event loop yet. Non-key events are deliberately
+/// discarded here because timer/device dispatch is not active until normal
+/// startup; keyboard events still use the same queue as the IRQ and USB-HID
+/// paths, so this does not create a second input buffer.
+pub fn poll_queued_key() -> Option<Irq> {
+    let q = &raw mut QUEUE;
+    unsafe {
+        while let Some(event) = (*q).pop() {
+            if matches!(event, Irq::Key(_)) {
+                return Some(event);
+            }
+        }
+    }
+    None
+}
+
+/// Poll one byte from the i8042 keyboard without waiting. This is only used
+/// before the normal IRQ/event loop exists; the IRQ handler remains the normal
+/// owner afterwards.
+pub fn poll_ps2_key() -> Option<u8> {
+    for _ in 0..8 {
+        let status = inb(0x64);
+        if status == 0xFF || status & 1 == 0 {
+            return None;
+        }
+        let byte = inb(0x60);
+        if status & 0x20 == 0 {
+            return Some(byte);
+        }
+        // Auxiliary (mouse) bytes must be consumed so a mouse packet cannot
+        // hold the controller's output buffer ahead of the keyboard.
+    }
+    None
+}
+
+
 /// Push one already-decoded pointing-device report. USB HID and i8042 use the
 /// same canonical event, so focus routing and the DOS INT 33h implementation do
 /// not depend on which physical bus supplied the mouse.

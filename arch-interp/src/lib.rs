@@ -75,8 +75,15 @@ pub use backend::Interp;
 pub use calls::*;
 pub use machine::{
     clean_fx_template, drain, free_page_count, halt_forever, inb, inl, insw, inw, now, outb, outl,
-    outsw, outw, post_irq, rdtsc, set_irq_line, shutdown, FxState,
+    outsw, outw, poll_key, post_irq, rdtsc, set_irq_line, shutdown, FxState,
 };
+
+/// Early-console input adapter over the existing host/SDL IRQ queue.
+pub fn early_console_input() -> Option<arch_abi::Irq> { machine::poll_key() }
+
+/// Hosted renderers keep the logical cursor in lib::term; there is no hardware
+/// cursor register to update during the early console.
+pub fn early_console_cursor(_column: usize, _row: usize) {}
 // Interactive console (hosted `main` drives input): raw terminal mode; key
 // events are posted via `post_irq` and surface to the kernel through `drain`.
 pub use tty::enter_raw_mode;

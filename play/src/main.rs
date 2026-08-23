@@ -148,7 +148,12 @@ fn main() {
             config.set_c_root(c.as_bytes());
         }
         let mut machine = arch::Interp;
-        kernel::startup(&mut machine, &config);
+        kernel::startup(
+                    &mut machine,
+                    &mut config,
+                    arch::early_console_input,
+                    arch::early_console_cursor,
+                );
     });
 
     display::run() // main thread: SDL loop; exits the process on window close

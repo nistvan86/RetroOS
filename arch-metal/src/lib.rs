@@ -25,6 +25,23 @@ mod vcpu;
 pub mod x86;
 pub mod xhci;
 
+/// Early-console input adapter: consume the existing IRQ/USB queue first, then
+/// poll the i8042 without blocking. Kept outside Arch so the architecture
+/// contract does not acquire console policy.
+pub fn early_console_input() -> Option<arch_abi::Irq> {
+    irq::poll_queued_key().or_else(|| irq::poll_ps2_key().map(arch_abi::Irq::Key))
+}
+
+/// Publish the shared logical cursor to the legacy VGA CRTC.
+pub fn early_console_cursor(column: usize, row: usize) {
+    let offset = row.min(24) * 80 + column.min(79);
+    let crtc = if x86::inb(0x3CC) & 1 != 0 { 0x3D4 } else { 0x3B4 };
+    x86::outb(crtc, 0x0E);
+    x86::outb(crtc + 1, (offset >> 8) as u8);
+    x86::outb(crtc, 0x0F);
+    x86::outb(crtc + 1, offset as u8);
+}
+
 // === Metal-only boot data (consumed by the bring-up here and by the kernel's
 // `boot.rs` entry). On the interp backend none of this exists. ===
 

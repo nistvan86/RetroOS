@@ -253,10 +253,24 @@ pub unsafe extern "C" fn boot_kernel(magic: u32, info: *const arch::MultibootInf
     irq::init_interrupts();
     lib::screenln!(screen, "Interrupts initialized");
 
+    // Keep the backend handle alive through the pre-ring-1 early console as
+    // well as normal startup, so all backends use the same input contract.
+    let mut machine = arch::Metal;
+
     if config.early_console {
-        match crate::kernel::early_console::run(screen, &mut config, arch::shutdown) {
+        match crate::kernel::early_console::run(
+                    &mut machine,
+                    screen,
+                    &mut config,
+                    arch::early_console_input,
+                    arch::early_console_cursor,
+                ) {
             crate::kernel::early_console::EarlyConsoleAction::Continue
             | crate::kernel::early_console::EarlyConsoleAction::Exec => {
+                // The directive is a one-shot boot stop. Startup also has a
+                // common hosted/play entrypoint, so do not enter the monitor a
+                // second time after this metal pre-ring-1 handoff.
+                config.early_console = false;
                 crate::kernel::serial_console::detach_to_logging();
             }
             crate::kernel::early_console::EarlyConsoleAction::Reboot => unreachable!(),
@@ -311,11 +325,14 @@ pub unsafe extern "C" fn boot_kernel(magic: u32, info: *const arch::MultibootInf
     // The arch backend handle, threaded as `&mut` through the kernel from here
     // on so its mutable state is borrow-checked rather than global. Lives for
     // the rest of the kernel's life (startup never returns).
-    let mut machine = arch::Metal;
-
     lib::screenln!(screen, "Heap base: {:#x}", arch::heap_base());
 
-    crate::kernel::startup::startup(&mut machine, &config);
+    crate::kernel::startup::startup(
+            &mut machine,
+            &mut config,
+            arch::early_console_input,
+            arch::early_console_cursor,
+        );
 }
 
 /// Read platform boot settings into a `BootConfig`. The Multiboot command line

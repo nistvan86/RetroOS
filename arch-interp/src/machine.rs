@@ -207,12 +207,23 @@ pub fn drain(mut f: impl FnMut(Irq)) {
             // concurrent `post_irq` can't be lost (it re-asserts under the lock).
             INPUT_PENDING.store(false, Ordering::Relaxed);
             v
-        }
+        },
         Err(_) => return,
     };
     for e in events {
         f(e);
     }
+}
+
+/// Remove one keyboard event for the pre-scheduler early console. This reuses
+/// the host-input queue populated by stdin and SDL; it does not introduce a
+/// second queue or a second keyboard translation path.
+pub fn poll_key() -> Option<Irq> {
+    let mut q = INPUT_QUEUE.lock().ok()?;
+    let index = q.iter().position(|event| matches!(event, Irq::Key(_)))?;
+    let event = q.remove(index)?;
+    INPUT_PENDING.store(!q.is_empty(), Ordering::Relaxed);
+    Some(event)
 }
 
 /// Physical free-page count, for diagnostic logging only. The interpreter has

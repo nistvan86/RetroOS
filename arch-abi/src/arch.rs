@@ -180,6 +180,8 @@ pub trait Arch: Sized + GuestBytes {
     /// event, leaving `regs` holding the post-run register state.
     fn execute(&mut self, regs: &mut Regs, io: &crate::IoPolicy) -> KernelEvent;
 
+
+
     /// Whether this backend can run 64-bit user code (`UserMode::Mode64`).
     /// On metal this is a CPU fact (long mode available); the hosted machine
     /// model is 32-bit non-PAE, so both hosted engines answer false. Exec
@@ -361,6 +363,8 @@ pub trait Arch: Sized + GuestBytes {
     fn free_page_count(&self) -> usize;
     /// Power off / leave the host.
     fn shutdown(&mut self) -> !;
+    /// Restart the machine or hosted backend.
+    fn reboot(&mut self) -> !;
     /// Disable interrupts and halt forever (panic / shutdown failure).
     fn halt_forever(&mut self) -> !;
 

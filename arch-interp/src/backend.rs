@@ -86,6 +86,7 @@ impl Arch for Interp {
     // ── Timer ──
     fn now(&self) -> u64 { crate::machine::now() }
     fn drain(&mut self, f: &mut dyn FnMut(Irq)) { crate::machine::drain(f) }
+
     fn rdtsc(&self) -> u64 { crate::machine::rdtsc() }
 
     // ── IRQ lines ──
@@ -142,6 +143,7 @@ impl Arch for Interp {
     // ── Diagnostics & power ──
     fn free_page_count(&self) -> usize { crate::machine::free_page_count() }
     fn shutdown(&mut self) -> ! { crate::machine::shutdown() }
+    fn reboot(&mut self) -> ! { crate::machine::shutdown() }
     fn halt_forever(&mut self) -> ! { crate::machine::halt_forever() }
 
     // ── x86 descriptor resolution (associated fns — ambient `desc` state) ──
