@@ -38,6 +38,7 @@ pub mod stacktrace;
 pub mod block;
 pub mod console;
 pub mod console_session;
+pub mod console_tty;
 pub mod display;
 pub mod keyboard;
 pub mod kpipe;

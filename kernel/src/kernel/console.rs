@@ -49,17 +49,19 @@ pub fn dispatch<A: crate::Arch>(
         thread::Personality::Linux(linux) => {
             dispatch_linux(machine, regs, kt, linux, guest_events)
         }
-        thread::Personality::Os2(os2) => {
+        thread::Personality::Os2(_os2) => {
+            let mut tty = crate::kernel::console_tty::TtyConsoleAdapter::from_fds(&kt.fds);
             for evt in guest_events {
-                if let crate::Irq::Key(scancode) = evt {
-                    os2.process_key(&kt.fds, scancode);
+                if let (Some(tty), crate::Irq::Key(scancode)) = (&mut tty, evt) {
+                    tty.deliver_scancode(scancode);
                 }
             }
         }
-        thread::Personality::Windows(windows) => {
+        thread::Personality::Windows(_windows) => {
+            let mut tty = crate::kernel::console_tty::TtyConsoleAdapter::from_fds(&kt.fds);
             for evt in guest_events {
-                if let crate::Irq::Key(scancode) = evt {
-                    windows.process_key(&kt.fds, scancode);
+                if let (Some(tty), crate::Irq::Key(scancode)) = (&mut tty, evt) {
+                    tty.deliver_scancode(scancode);
                 }
             }
         }
@@ -164,15 +166,15 @@ fn dispatch_linux<A: crate::Arch>(
     linux: &mut thread::LinuxState,
     events: alloc::vec::Vec<crate::Irq>,
 ) {
-    let ktp = kt as *mut thread::KernelThread<A>;
-    let lp = linux as *mut thread::LinuxState;
-    {
-        for evt in events {
-        if let crate::Irq::Key(sc) = evt
-        {
-            unsafe { (*lp).process_key(machine, &(*ktp).fds, sc) };
+    let _ = machine;
+    let _ = linux;
+    let Some(mut tty) = crate::kernel::console_tty::TtyConsoleAdapter::from_fds(&kt.fds) else {
+        return;
+    };
+    for evt in events {
+        if let crate::Irq::Key(scancode) = evt {
+            tty.deliver_scancode(scancode);
         }
-    }
     }
 }
 

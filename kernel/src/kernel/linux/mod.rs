@@ -23,7 +23,7 @@ use crate::kernel::stacktrace::SymbolData;
 use crate::kernel::thread;
 use crate::kernel::thread::{FdKind, PendingRead, PendingPoll, MAX_FDS};
 use crate::kernel::vfs;
-use crate::term;
+
 use crate::Regs;
 use crate::println;
 
@@ -878,10 +878,7 @@ fn sys_write<A: crate::Arch>(machine: &mut A, kt: &mut thread::KernelThread<A>, 
         thread::FdKind::ConsoleOut => {
             let mut tmp = alloc::vec![0u8; len];
             machine.copy_from(buf, &mut tmp);
-            for &b in &tmp {
-                term::putchar(b);
-            }
-            crate::kernel::term::mark_dirty();
+            crate::kernel::console_tty::write_console_bytes(&tmp);
             SyscallResult::val(len as i32)
         }
         thread::FdKind::PipeWrite(idx) => {
@@ -1617,10 +1614,7 @@ fn sys_writev<A: crate::Arch>(machine: &mut A, kt: &mut thread::KernelThread<A>,
         machine.copy_from(iov_base, &mut iov);
         match fd_kind {
             thread::FdKind::ConsoleOut => {
-                for &b in &iov {
-                    term::putchar(b);
-                }
-                crate::kernel::term::mark_dirty();
+                crate::kernel::console_tty::write_console_bytes(&iov);
                 total += iov_len as i32;
             }
             thread::FdKind::PipeWrite(idx) => {

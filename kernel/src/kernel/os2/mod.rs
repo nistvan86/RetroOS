@@ -624,8 +624,7 @@ fn dos_write<A: crate::Arch>(machine: &mut A, kt: &mut thread::KernelThread<A>, 
     machine.copy_from(buffer, &mut bytes);
     let written = match kt.fds[handle] {
         thread::FdKind::ConsoleOut => {
-            for &b in &bytes { crate::term::putchar(b); }
-            crate::kernel::term::mark_dirty();
+            crate::kernel::console_tty::write_console_bytes(&bytes);
             length as i32
         }
         thread::FdKind::PipeWrite(pipe) => crate::kernel::kpipe::write(pipe, &bytes),

@@ -373,7 +373,7 @@ fn io_write<A: crate::Arch>(machine: &mut A, kt: &mut thread::KernelThread<A>, h
     if handle >= thread::MAX_FDS { return 0; }
     let mut data = vec![0; len]; machine.copy_from(ptr, &mut data);
     let n = match kt.fds[handle] {
-        thread::FdKind::ConsoleOut => { for &b in &data { crate::term::putchar(b); } crate::kernel::term::mark_dirty(); len as i32 }
+        thread::FdKind::ConsoleOut => { crate::kernel::console_tty::write_console_bytes(&data); len as i32 }
         thread::FdKind::PipeWrite(p) => crate::kernel::kpipe::write(p, &data),
         thread::FdKind::Vfs(h) => crate::kernel::vfs::write_by_handle(machine, h, &data),
         _ => -1,
