@@ -1,0 +1,8 @@
+genrule(
+    name = "echo",
+    srcs = ["echo.asm"],
+    outs = ["ECHO.ELF"],
+    cmd = "nasm -f elf32 -o $(@D)/echo.o $(location echo.asm) && " +
+          "ld -m elf_i386 -o $@ $(@D)/echo.o",
+    visibility = ["//visibility:public"],
+)

@@ -220,6 +220,13 @@ def main() -> int:
         run_personality_probe(
             root,
             directory,
+            "bazel-out/k8-opt/bin/test/linux/hello/ECHO.ELF",
+            "LINUXECHO.ELF",
+            b"Hello from Linux personality",
+        )
+        run_personality_probe(
+            root,
+            directory,
             "bazel-out/k8-opt/bin/test/os2/hello/hello_lx.exe",
             "OS2HELLO.EXE",
             b"Hello from Open Watcom C",
@@ -232,7 +239,7 @@ def main() -> int:
             b"Hello from Open Watcom Win32",
         )
 
-    print("PASS: QEMU early-console HostFS exec, DOS, OS/2, and Win32 echo")
+    print("PASS: QEMU early-console HostFS exec, DOS, Linux, OS/2, and Win32 echo")
     return 0
 
 

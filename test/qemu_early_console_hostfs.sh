@@ -3,6 +3,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 bazelisk build //:image \
+  //test/linux/hello:echo \
   //test/os2/hello:hello_lx \
   //apps/os2/doscalls:doscalls_dll \
   //test/windows/hello:hello \
