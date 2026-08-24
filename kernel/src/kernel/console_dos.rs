@@ -21,6 +21,12 @@ impl<'a, A: crate::Arch> DosConsoleAdapter<'a, A> {
     }
 }
 
+/// Send DOS text output through the attached-session route. DOS's BIOS/VGA
+/// rendering and ambient debug mirror remain owned by their existing paths.
+pub fn write_attached_byte(byte: u8) {
+    crate::kernel::serial_log::write_session_byte(byte);
+}
+
 /// Translate one terminal byte into a short Set-1 make/break sequence.
 /// Returns zero for bytes without a faithful basic keyboard representation.
 /// The caller owns the sequence storage so this helper allocates nothing and
