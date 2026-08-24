@@ -15,8 +15,10 @@
 //! - Linux owners get keys cooked into their fds; they have no virtual
 //!   device bus for other IRQs.
 
+pub mod dos;
 pub mod protocol;
 pub mod session;
+pub mod stream;
 
 use crate::Regs;
 use crate::kernel::thread;
@@ -53,7 +55,7 @@ pub fn dispatch<A: crate::Arch>(
             dispatch_linux(machine, regs, kt, linux, guest_events)
         }
         thread::Personality::Os2(_os2) => {
-            let mut tty = crate::kernel::console_tty::TtyConsoleAdapter::from_fds(&kt.fds);
+            let mut tty = stream::StreamConsoleAdapter::from_fds(&kt.fds);
             for evt in guest_events {
                 if let (Some(tty), crate::Irq::Key(scancode)) = (&mut tty, evt) {
                     tty.deliver_scancode(scancode);
@@ -61,7 +63,7 @@ pub fn dispatch<A: crate::Arch>(
             }
         }
         thread::Personality::Windows(_windows) => {
-            let mut tty = crate::kernel::console_tty::TtyConsoleAdapter::from_fds(&kt.fds);
+            let mut tty = stream::StreamConsoleAdapter::from_fds(&kt.fds);
             for evt in guest_events {
                 if let (Some(tty), crate::Irq::Key(scancode)) = (&mut tty, evt) {
                     tty.deliver_scancode(scancode);
@@ -83,7 +85,7 @@ pub fn dispatch_serial_bytes<A: crate::Arch>(
         thread::Personality::Linux(_)
         | thread::Personality::Os2(_)
         | thread::Personality::Windows(_) => {
-            crate::kernel::console_tty::TtyConsoleAdapter::from_fds(&kt.fds)
+            stream::StreamConsoleAdapter::from_fds(&kt.fds)
         }
         thread::Personality::Dos(_) => None,
     };
@@ -117,7 +119,7 @@ fn dispatch_dos<A: crate::Arch>(
                     }
                 }
             } else {
-                let mut adapter = crate::kernel::console_dos::DosConsoleAdapter::new(unsafe { &mut *dp });
+                let mut adapter = dos::DosConsoleAdapter::new(unsafe { &mut *dp });
                 adapter.deliver_scancode(machine, regs, sc);
             }
         } else {
@@ -194,7 +196,7 @@ fn dispatch_linux<A: crate::Arch>(
 ) {
     let _ = machine;
     let _ = linux;
-    let Some(mut tty) = crate::kernel::console_tty::TtyConsoleAdapter::from_fds(&kt.fds) else {
+    let Some(mut tty) = stream::StreamConsoleAdapter::from_fds(&kt.fds) else {
         return;
     };
     for evt in events {

@@ -8,11 +8,11 @@ use crate::kernel::{keyboard, kpipe, term};
 use crate::kernel::thread::{FdKind, MAX_FDS};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct TtyConsoleAdapter {
+pub struct StreamConsoleAdapter {
     input_pipe: u8,
 }
 
-impl TtyConsoleAdapter {
+impl StreamConsoleAdapter {
     pub fn new(input_pipe: u8) -> Self {
         Self { input_pipe }
     }
@@ -42,7 +42,7 @@ impl TtyConsoleAdapter {
     }
 }
 
-/// Preserve the existing ConsoleOut behavior while giving all TTY-like
+/// Preserve the existing ConsoleOut behavior while giving all stream-model
 /// personalities one output adapter call site.
 pub fn write_console_bytes(bytes: &[u8]) {
     for &byte in bytes {
@@ -54,11 +54,11 @@ pub fn write_console_bytes(bytes: &[u8]) {
 
 #[cfg(test)]
 mod tests {
-    use super::TtyConsoleAdapter;
+    use super::StreamConsoleAdapter;
 
     #[test]
     fn constructs_for_a_pipe_endpoint() {
-        let adapter = TtyConsoleAdapter::new(7);
-        assert_eq!(adapter, TtyConsoleAdapter::new(7));
+        let adapter = StreamConsoleAdapter::new(7);
+        assert_eq!(adapter, StreamConsoleAdapter::new(7));
     }
 }
