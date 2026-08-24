@@ -44,6 +44,13 @@ const ENOTTY: i32 = 25;
 const EINVAL: i32 = 22;
 const ESPIPE: i32 = 29;
 const EPIPE: i32 = 32;
+
+const LINUX_REBOOT_MAGIC1: u64 = 0xFEE1_DEAD;
+const LINUX_REBOOT_MAGIC2: u64 = 672_274_793;
+const LINUX_REBOOT_MAGIC2A: u64 = 85_072_278;
+const LINUX_REBOOT_MAGIC2B: u64 = 369_367_448;
+const LINUX_REBOOT_MAGIC2C: u64 = 537_993_216;
+const LINUX_REBOOT_CMD_RESTART: u64 = 0x0123_4567;
 const ENOSYS: i32 = 38;
 
 pub fn repaint_console() { crate::kernel::term::mark_dirty(); }
@@ -330,6 +337,7 @@ fn dispatch_nr<A: crate::Arch>(machine: &mut A, kt: &mut thread::KernelThread<A>
         55  => sys_fcntl(kt, a),
         63  => sys_dup2(kt, a),
         85  => sys_readlink(machine, linux, a),
+        88  => sys_reboot(machine, a),
         // Old i386 struct stat — 64-byte layout. busybox/uclibc still uses
         // these and falls back from stat64; without them mode comes back
         // zero and access(X_OK) reports "Permission denied".
@@ -425,6 +433,7 @@ fn dispatch_nr_64<A: crate::Arch>(machine: &mut A, kt: &mut thread::KernelThread
         79  => sys_getcwd(machine, &mut kt.vcpu, linux, a),
         80  => sys_chdir(machine, &mut kt.vcpu, linux, a),
         89  => sys_readlink(machine, linux, a),
+        169 => sys_reboot(machine, a),
         96  => sys_clock_gettime(machine, &mut kt.vcpu, a),
         102 | 104 | 107 | 108 => SyscallResult::val(0),
         110 => SyscallResult::val(kt.tid),
@@ -731,6 +740,52 @@ pub fn exec_elf_into<A: crate::Arch>(machine: &mut A, threads: &mut [thread::Thr
 // =============================================================================
 // Syscall handlers
 // =============================================================================
+
+fn valid_reboot_magic(magic1: u64, magic2: u64) -> bool {
+    magic1 == LINUX_REBOOT_MAGIC1
+        && matches!(magic2, LINUX_REBOOT_MAGIC2 | LINUX_REBOOT_MAGIC2A | LINUX_REBOOT_MAGIC2B | LINUX_REBOOT_MAGIC2C)
+}
+
+fn valid_reboot_request(magic1: u64, magic2: u64, command: u64) -> bool {
+    valid_reboot_magic(magic1, magic2) && command == LINUX_REBOOT_CMD_RESTART
+}
+
+fn sys_reboot<A: crate::Arch>(machine: &mut A, a: &Args) -> SyscallResult {
+    if !valid_reboot_request(a.a0, a.a1, a.a2) {
+        return SyscallResult::val(-EINVAL);
+    }
+    crate::println!("linux reboot requested");
+    crate::kernel::drivers::hda::emergency_quiesce();
+    machine.reboot()
+}
+
+#[cfg(test)]
+mod reboot_tests {
+    use super::{valid_reboot_magic, valid_reboot_request, LINUX_REBOOT_CMD_RESTART,
+        LINUX_REBOOT_MAGIC1, LINUX_REBOOT_MAGIC2,
+        LINUX_REBOOT_MAGIC2A, LINUX_REBOOT_MAGIC2B, LINUX_REBOOT_MAGIC2C};
+
+    #[test]
+    fn accepts_all_linux_reboot_magic_pairs() {
+        for magic2 in [LINUX_REBOOT_MAGIC2, LINUX_REBOOT_MAGIC2A,
+            LINUX_REBOOT_MAGIC2B, LINUX_REBOOT_MAGIC2C] {
+            assert!(valid_reboot_magic(LINUX_REBOOT_MAGIC1, magic2));
+        }
+    }
+
+    #[test]
+    fn rejects_invalid_reboot_magic() {
+        assert!(!valid_reboot_magic(0, LINUX_REBOOT_MAGIC2));
+        assert!(!valid_reboot_magic(LINUX_REBOOT_MAGIC1, 0));
+    }
+
+    #[test]
+    fn rejects_unsupported_reboot_command() {
+        assert!(!valid_reboot_request(LINUX_REBOOT_MAGIC1, LINUX_REBOOT_MAGIC2, 0));
+        assert!(valid_reboot_request(LINUX_REBOOT_MAGIC1, LINUX_REBOOT_MAGIC2,
+            LINUX_REBOOT_CMD_RESTART));
+    }
+}
 
 /// exit(1) / exit_group(252)
 fn sys_exit<A: crate::Arch>(_machine: &mut A, _tid: usize, a: &Args) -> SyscallResult {
