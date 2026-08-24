@@ -99,7 +99,7 @@ pub fn enter_emergency() {
 }
 
 /// Write one byte from an attached session through the sole session TX route.
-pub fn write_session_byte(byte: u8) {
+pub(super) fn write_session_byte(byte: u8) {
     if serial::session_tx_allowed() {
         write_uart_byte(byte);
     }

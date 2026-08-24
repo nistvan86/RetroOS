@@ -42,6 +42,7 @@ fn main() {
     let mut shot: Option<String> = None;
     let mut wav: Option<String> = None;
     let mut live_console = false;
+    let mut console_stage: Option<kernel::ConsoleBootStage> = None;
     // Positional args: [0] = program/disk, [1..] = the program's own argv tail.
     let mut positional: Vec<String> = Vec::new();
     let mut args = std::env::args().skip(1);
@@ -55,6 +56,20 @@ fn main() {
             // mechanism QEMU's `-fw_cfg name=opt/cmdline,string=...` drives on
             // metal. `startup()` runs the program(s), then shuts down (no DN loop).
             "--cmd" | "-c" => cmd = args.next(),
+            "--console-stage" => {
+                console_stage = match args.next().as_deref() {
+                    Some("early") => Some(kernel::ConsoleBootStage::Early),
+                    Some("kernel") => Some(kernel::ConsoleBootStage::Kernel),
+                    Some(value) => {
+                        eprintln!("invalid --console-stage value: {value}");
+                        std::process::exit(2);
+                    }
+                    None => {
+                        eprintln!("--console-stage requires early or kernel");
+                        std::process::exit(2);
+                    }
+                };
+            }
             "--cwd" => cwd = args.next(),
             "--c-root" => c_root = args.next(),
             // Periodically snapshot the guest's VGA text screen (0xB8000) to a
@@ -208,6 +223,7 @@ fn main() {
     if let Some(c) = &cmd { config.set_cmdline(c.as_bytes()); }
     if let Some(c) = &cwd { config.set_cwd(c.as_bytes()); }
     if let Some(c) = &c_root { config.set_c_root(c.as_bytes()); }
+    config.console = console_stage;
 
     let mut machine = arch::Interp;
     let coordinator = kernel::kernel::console::coordinator::ConsoleCoordinator::new();
