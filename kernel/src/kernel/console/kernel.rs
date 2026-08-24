@@ -24,7 +24,7 @@ pub struct KernelConsole {
     exec: [u8; 256],
     exec_len: usize,
     pending_action: Option<KernelConsoleAction>,
-    post_exec: arch_abi::PostExecAction,
+    post_exec: Option<arch_abi::PostExecAction>,
 }
 
 impl KernelConsole {
@@ -37,7 +37,7 @@ impl KernelConsole {
             exec: [0; 256],
             exec_len: 0,
             pending_action: None,
-            post_exec: arch_abi::PostExecAction::Shutdown,
+            post_exec: Some(arch_abi::PostExecAction::ReturnToKernelConsole),
         }
     }
 
@@ -106,9 +106,8 @@ impl KernelConsole {
         }
         if command.starts_with(b"exec ") {
             let mut path = &command[5..];
-            let mut post_exec = arch_abi::PostExecAction::ContinueToDn;
+            let mut post_exec = arch_abi::PostExecAction::ReturnToKernelConsole;
             for (option, action) in [
-                (b"--and-dn " as &[u8], arch_abi::PostExecAction::ContinueToDn),
                 (b"--and-halt " as &[u8], arch_abi::PostExecAction::Shutdown),
                 (b"--and-reboot " as &[u8], arch_abi::PostExecAction::Reboot),
             ] {
@@ -121,7 +120,7 @@ impl KernelConsole {
             if !path.is_empty() && path.len() <= self.exec.len() {
                 self.exec[..path.len()].copy_from_slice(path);
                 self.exec_len = path.len();
-                self.post_exec = post_exec;
+                self.post_exec = Some(post_exec);
                 return Some(KernelConsoleAction::Exec);
             }
         }
@@ -134,7 +133,7 @@ impl KernelConsole {
             return;
         }
         match &self.line[..self.len] {
-            b"help" => write_bytes(out, b"commands: help info boot reboot panic exec [--and-dn|--and-halt|--and-reboot] <path> [args]\r\n"),
+            b"help" => write_bytes(out, b"commands: help info boot reboot panic exec [--and-halt|--and-reboot] <path> [args]\r\n"),
             b"info" => match self.phase {
                 KernelConsolePhase::EarlyBoot => write_bytes(out, b"early console: paging active\r\n"),
                 KernelConsolePhase::KernelReady => write_bytes(out, b"kernel console: kernel ready\r\n"),
@@ -151,7 +150,7 @@ impl KernelConsole {
         (self.exec_len != 0).then_some(&self.exec[..self.exec_len])
     }
 
-    pub fn post_exec(&self) -> arch_abi::PostExecAction { self.post_exec }
+    pub fn post_exec(&self) -> Option<arch_abi::PostExecAction> { self.post_exec }
 
     pub fn take_action(&mut self) -> Option<KernelConsoleAction> {
         self.pending_action.take()
@@ -216,7 +215,7 @@ mod tests {
     fn echoes_line_and_help_response() {
         let mut console = KernelConsole::new(KernelConsolePhase::EarlyBoot);
         let (output, _) = send(&mut console, b"help\r");
-        assert_eq!(output, b"help\r\ncommands: help info boot reboot panic exec [--and-dn|--and-halt|--and-reboot] <path> [args]\r\nearly> ");
+        assert_eq!(output, b"help\r\ncommands: help info boot reboot panic exec [--and-halt|--and-reboot] <path> [args]\r\nearly> ");
     }
 
     #[test]
@@ -235,24 +234,23 @@ mod tests {
     }
 
     #[test]
-    fn exec_post_action_suffix_is_removed_from_launch() {
+    fn exec_post_action_options_are_explicit() {
         let mut console = KernelConsole::new(KernelConsolePhase::EarlyBoot);
         let (_, action) = send(&mut console, b"exec /host/STUB.COM arg\r");
         assert_eq!(action, Some(KernelConsoleAction::Exec));
         assert_eq!(console.exec_command(), Some(&b"/host/STUB.COM arg"[..]));
-        assert_eq!(console.post_exec(), arch_abi::PostExecAction::ContinueToDn);
-
-        let (_, action) = send(&mut console, b"exec --and-dn /host/STUB.COM\r");
-        assert_eq!(action, Some(KernelConsoleAction::Exec));
-        assert_eq!(console.post_exec(), arch_abi::PostExecAction::ContinueToDn);
+        assert_eq!(
+            console.post_exec(),
+            Some(arch_abi::PostExecAction::ReturnToKernelConsole)
+        );
 
         let (_, action) = send(&mut console, b"exec --and-halt /host/STUB.COM\r");
         assert_eq!(action, Some(KernelConsoleAction::Exec));
-        assert_eq!(console.post_exec(), arch_abi::PostExecAction::Shutdown);
+        assert_eq!(console.post_exec(), Some(arch_abi::PostExecAction::Shutdown));
 
         let (_, action) = send(&mut console, b"exec --and-reboot /host/STUB.COM\r");
         assert_eq!(action, Some(KernelConsoleAction::Exec));
-        assert_eq!(console.post_exec(), arch_abi::PostExecAction::Reboot);
+        assert_eq!(console.post_exec(), Some(arch_abi::PostExecAction::Reboot));
     }
 
     #[test]

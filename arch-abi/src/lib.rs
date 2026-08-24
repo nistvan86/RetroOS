@@ -86,11 +86,14 @@ impl BootModule {
 pub type BootPhysicalReader = fn(u64, &mut [u8]) -> bool;
 
 
-/// Action to take after a one-shot early-console executable exits.
+/// Action to take after a console-requested executable exits.
+///
+/// `None` in `BootConfig` means the executable was selected by the normal
+/// CONFIG.SYS/boot path, which retains its existing continuation behavior.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PostExecAction {
+    ReturnToKernelConsole,
     Shutdown,
-    ContinueToDn,
     Reboot,
 }
 
@@ -114,7 +117,7 @@ pub enum ConsoleBootStage {
 pub struct BootConfig {
     cmdline: [u8; 4096],
     cmdline_len: Option<usize>, // None = no headless cmdline (interactive DN loop)
-    post_exec: PostExecAction,
+    post_exec: Option<PostExecAction>,
     cwd: [u8; 256],
     cwd_len: Option<usize>,
     /// VFS subtree that DOS drive `C:` maps to (normalized: no leading `/`, one
@@ -165,7 +168,7 @@ impl BootConfig {
     pub const fn empty() -> Self {
         let mut cfg = BootConfig {
             cmdline: [0; 4096], cmdline_len: None,
-            post_exec: PostExecAction::Shutdown,
+            post_exec: None,
             cwd: [0; 256], cwd_len: None,
             c_root: [0; 128], c_root_len: 0,
             debug_watch: None, is_qemu: false, audio_mixed: false,
@@ -220,14 +223,14 @@ impl BootConfig {
     /// Clear the pending launch command so normal interactive startup is used.
     pub fn clear_launch_cmdline(&mut self) {
         self.cmdline_len = None;
-        self.post_exec = PostExecAction::Shutdown;
+        self.post_exec = None;
     }
 
-    pub fn set_post_exec(&mut self, action: PostExecAction) {
+    pub fn set_post_exec(&mut self, action: Option<PostExecAction>) {
         self.post_exec = action;
     }
 
-    pub fn post_exec(&self) -> PostExecAction { self.post_exec }
+    pub fn post_exec(&self) -> Option<PostExecAction> { self.post_exec }
 
     /// Record the headless command line (semicolon-separated program list).
     pub fn set_cmdline(&mut self, s: &[u8]) {

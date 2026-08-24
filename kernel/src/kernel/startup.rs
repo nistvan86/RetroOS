@@ -363,18 +363,44 @@ pub fn startup<A: crate::Arch>(
         }
     }
 
-    run(
-        machine,
-        boot,
-        &mut coordinator,
-        &master_env,
-        &mut bios_workspace,
-        &mut dos_template,
-        &mut threads,
+    let mut next_context = KernelRunContext {
         screen,
-        sb_card,
+        sb: sb_card,
         sink,
-    )
+    };
+    loop {
+        let result = run(
+            machine,
+            boot,
+            &mut coordinator,
+            &master_env,
+            &mut bios_workspace,
+            &mut dos_template,
+            &mut threads,
+            next_context,
+        );
+        match result.action {
+            RunAction::ReturnToKernelConsole => {
+                next_context = result.context;
+                match crate::kernel::early_console::run(
+                    machine,
+                    lib::term::term(),
+                    boot,
+                    &mut coordinator,
+                    crate::kernel::console::kernel::KernelConsolePhase::KernelReady,
+                    poll_input,
+                    sync_cursor,
+                ) {
+                    crate::kernel::early_console::EarlyConsoleAction::Exec => {
+                        boot.console = None;
+                    }
+                    crate::kernel::early_console::EarlyConsoleAction::Boot => unreachable!(),
+                    crate::kernel::early_console::EarlyConsoleAction::Reboot => unreachable!(),
+                    crate::kernel::early_console::EarlyConsoleAction::Panic => unreachable!(),
+                }
+            }
+        }
+    }
 }
 
 /// The host filesystem on the selected serial transport. Mounted at /host
@@ -654,6 +680,21 @@ mod launch_directive_tests {
     }
 }
 
+enum RunAction {
+    ReturnToKernelConsole,
+}
+
+struct KernelRunContext {
+    screen: crate::kernel::console::Console,
+    sb: Option<crate::kernel::drivers::sb16::SbCard>,
+    sink: Option<crate::kernel::sound::Sink>,
+}
+
+struct RunResult {
+    action: RunAction,
+    context: KernelRunContext,
+}
+
 #[allow(clippy::too_many_arguments)]
 fn run<A: crate::Arch>(
     machine: &mut A,
@@ -663,10 +704,9 @@ fn run<A: crate::Arch>(
     bios_workspace: &mut crate::kernel::bios_display::BiosDisplayWorkspace<A>,
     dos_template: &mut crate::kernel::dos::DosTemplate<A>,
     threads: &mut [thread::Thread<A>],
-    mut screen: crate::kernel::console::Console,
-    mut sb: Option<crate::kernel::drivers::sb16::SbCard>,
-    mut sink: Option<crate::kernel::sound::Sink>,
-) -> ! {
+    context: KernelRunContext,
+) -> RunResult {
+    let KernelRunContext { mut screen, mut sb, mut sink } = context;
     // What to run headlessly, from whichever channel the backend has. QEMU and
     // the hosted interpreter pass a cmdline through `opt/cmdline`; 86Box and
     // Bochs have NO such channel — `--cmd` was silently ignored there, so every
@@ -730,20 +770,24 @@ fn run<A: crate::Arch>(
         }
         if launched_any {
             match boot.post_exec() {
-            arch_abi::PostExecAction::Shutdown => {
-                crate::screenln!(screen, "All commands done — shutting down.");
-                crate::kernel::drivers::hda::emergency_quiesce();
-                machine.shutdown();
+                Some(arch_abi::PostExecAction::Shutdown) | None => {
+                    crate::screenln!(screen, "All commands done — shutting down.");
+                    crate::kernel::drivers::hda::emergency_quiesce();
+                    machine.shutdown();
+                }
+                Some(arch_abi::PostExecAction::Reboot) => {
+                    crate::screenln!(screen, "All commands done — rebooting.");
+                    crate::kernel::drivers::hda::emergency_quiesce();
+                    machine.reboot();
+                }
+                Some(arch_abi::PostExecAction::ReturnToKernelConsole) => {
+                    crate::screenln!(screen, "All commands done — returning to kernel console.");
+                    return RunResult {
+                        action: RunAction::ReturnToKernelConsole,
+                        context: KernelRunContext { screen, sb, sink },
+                    };
+                }
             }
-            arch_abi::PostExecAction::Reboot => {
-                crate::screenln!(screen, "All commands done — rebooting.");
-                crate::kernel::drivers::hda::emergency_quiesce();
-                machine.reboot();
-            }
-            arch_abi::PostExecAction::ContinueToDn => {
-                crate::screenln!(screen, "All commands done — starting DN.");
-            }
-        }
         }
     }
 

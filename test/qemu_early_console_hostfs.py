@@ -209,7 +209,9 @@ def main() -> int:
                     raise AssertionError(f"HostFS marker was duplicated: {bytes(output)!r}")
                 if b"Starting /host/STUB.COM" not in output:
                     raise AssertionError(f"HostFS executable was not selected: {bytes(output)!r}")
-                read_until(connection, b"Starting DN...", output)
+                read_until(connection, b"kernel> ", output)
+                if b"Starting DN..." in output:
+                    raise AssertionError(f"default exec entered DN unexpectedly: {bytes(output)!r}")
                 if "All commands done — shutting down.".encode() in output:
                     raise AssertionError(f"default exec halted unexpectedly: {bytes(output)!r}")
         finally:

@@ -100,7 +100,7 @@ pub fn run<A: crate::Arch>(
         for input in [serial_input, local_input].into_iter().flatten() {
             let mut command = [0; 256];
             let mut command_len = 0;
-            let mut post_exec = arch_abi::PostExecAction::Shutdown;
+            let mut post_exec = None;
             let action = {
                 let endpoint = coordinator.kernel_console_mut().expect("kernel console attached");
                 let mut session = ConsoleSession::new(
