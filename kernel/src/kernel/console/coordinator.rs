@@ -3,7 +3,7 @@
 use super::kernel::{KernelConsole, KernelConsolePhase};
 use super::protocol::{ConsoleControl as ProtocolControl, ConsoleProtocolEvent};
 use super::serial;
-use super::session::{InputEvent, InputDisposition};
+use super::session::{InputEvent, InputDisposition, OutputOrigin};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ConsoleTarget {
@@ -137,6 +137,30 @@ impl ConsoleCoordinator {
     }
 }
 
+/// Central interactive-output policy for call stacks that cannot borrow the
+/// coordinator value. Ambient and emergency logging remain outside this path.
+pub fn output_local(origin: OutputOrigin) -> bool {
+    matches!(origin, OutputOrigin::StreamConsole)
+}
+
+pub fn output_serial(origin: OutputOrigin) -> bool {
+    matches!(origin, OutputOrigin::StreamConsole | OutputOrigin::EndpointRendered)
+}
+
+pub fn write_output(origin: OutputOrigin, bytes: &[u8]) {
+    if output_local(origin) {
+        for &byte in bytes {
+            crate::term::putchar(byte);
+        }
+        crate::kernel::term::mark_dirty();
+    }
+    if output_serial(origin) {
+        for &byte in bytes {
+            crate::kernel::serial_log::write_session_byte(byte);
+        }
+    }
+}
+
 fn deliver_blocked_dos(input: InputEvent) -> InputDisposition {
     let byte = match input {
         InputEvent::Scancode(scancode) => {
@@ -185,7 +209,7 @@ mod tests {
     use super::{map_protocol_event, ConsoleControl, ConsoleCoordinator, ConsoleTarget, CoordinatorEvent};
     use crate::kernel::console::kernel::KernelConsolePhase;
     use crate::kernel::console::protocol::{ConsoleControl as ProtocolControl, ConsoleProtocolEvent};
-    use crate::kernel::console::session::InputEvent;
+    use crate::kernel::console::session::{InputEvent, OutputOrigin};
 
     #[test]
     fn protocol_controls_are_admitted_without_an_endpoint() {
@@ -210,6 +234,14 @@ mod tests {
             ),
             Some(CoordinatorEvent::Input(InputEvent::Byte(b'x'))),
         );
+    }
+
+    #[test]
+    fn output_origins_have_no_duplicate_local_route() {
+        assert!(super::output_local(OutputOrigin::StreamConsole));
+        assert!(super::output_serial(OutputOrigin::StreamConsole));
+        assert!(!super::output_local(OutputOrigin::EndpointRendered));
+        assert!(super::output_serial(OutputOrigin::EndpointRendered));
     }
 
     #[test]

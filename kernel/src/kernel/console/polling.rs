@@ -25,7 +25,10 @@ struct SerialOutput;
 
 impl OutputAttachment for SerialOutput {
     fn write_byte(&mut self, byte: u8) {
-        crate::kernel::serial_log::write_session_byte(byte);
+        super::coordinator::write_output(
+            super::session::OutputOrigin::EndpointRendered,
+            &[byte],
+        );
     }
 }
 

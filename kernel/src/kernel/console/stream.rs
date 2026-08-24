@@ -4,7 +4,7 @@
 //! canonical input buffer and `kernel::term` as the canonical output state while
 //! giving transports and personalities one shared call surface.
 
-use crate::kernel::{keyboard, kpipe, term};
+use crate::kernel::{keyboard, kpipe};
 use crate::kernel::thread::{FdKind, MAX_FDS};
 use super::session::InputDisposition;
 
@@ -49,11 +49,10 @@ impl StreamConsoleAdapter {
 /// Preserve the existing ConsoleOut behavior while giving all stream-model
 /// personalities one output adapter call site.
 pub fn write_console_bytes(bytes: &[u8]) {
-    for &byte in bytes {
-        term::putchar(byte);
-        crate::kernel::serial_log::write_session_byte(byte);
-    }
-    term::mark_dirty();
+    super::coordinator::write_output(
+        super::session::OutputOrigin::StreamConsole,
+        bytes,
+    );
 }
 
 #[cfg(test)]

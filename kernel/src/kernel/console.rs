@@ -199,11 +199,10 @@ impl Console {
 
 impl core::fmt::Write for Console {
     fn write_str(&mut self, s: &str) -> core::fmt::Result {
-        core::fmt::Write::write_str(lib::term::term(), s)?;
-        for byte in s.bytes() {
-            crate::kernel::serial_log::write_session_byte(byte);
-        }
-        crate::kernel::term::mark_dirty();
+        coordinator::write_output(
+            session::OutputOrigin::StreamConsole,
+            s.as_bytes(),
+        );
         Ok(())
     }
 }
