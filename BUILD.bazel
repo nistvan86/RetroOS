@@ -262,7 +262,10 @@ pkg_tar(
 # busybox + applet shims at /bin (the Linux side, NOT under home/retroos).
 pkg_tar(
     name = "bin_tar",
-    files = {"//:apps/busybox/busybox": "bin/busybox"},
+    files = {
+        "//:apps/busybox/busybox": "bin/busybox",
+        "//shell:init_elf": "sbin/init",
+    },
     srcs = [":lnk_bin_" + a for a in _BUSYBOX_APPLETS],
 )
 

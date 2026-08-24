@@ -27,3 +27,24 @@ musl_binary(
     binary = ":shell_bin",
     visibility = ["//visibility:public"],
 )
+
+rust_binary(
+    name = "init_bin",
+    srcs = ["src/init.rs"],
+    edition = "2024",
+    rustc_flags = [
+        "-Copt-level=s",
+        "-Cstrip=symbols",
+        "-Clinker-flavor=ld.lld",
+        "-Clinker=rust-lld",
+        "-Ctarget-cpu=i486",
+        "-Cpanic=abort",
+        "-Clink-arg=-lc",
+    ],
+)
+
+musl_binary(
+    name = "init_elf",
+    binary = ":init_bin",
+    visibility = ["//visibility:public"],
+)
