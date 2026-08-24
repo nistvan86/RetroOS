@@ -308,11 +308,6 @@ fn w32(off: usize, v: u32) {
 fn stop_controller_dma() {
     let gcap = r16(GCAP);
     let stream_count = (((gcap >> 8) & 0xF) + ((gcap >> 12) & 0xF)) as usize;
-    crate::println!(
-        "hda: emergency quiesce begin gcap={:#06x} streams={}",
-        gcap,
-        stream_count,
-    );
     for i in 0..stream_count {
         let sd = SD_BASE + i * SD_STRIDE;
         w8(sd + SDCTL, r8(sd + SDCTL) & !0x02);
@@ -322,7 +317,6 @@ fn stop_controller_dma() {
     // controller reset while a stream still reports RUN: the SEJT can leave
     // the codec wedged and fail to reset. This is deliberately bounded because
     // the helper is also used by panic and emergency reboot paths.
-    let mut streams_stopped = false;
     for _ in 0..100_000 {
         let mut running = false;
         for i in 0..stream_count {
@@ -333,26 +327,15 @@ fn stop_controller_dma() {
             }
         }
         if !running {
-            streams_stopped = true;
             break;
         }
         core::hint::spin_loop();
     }
-    crate::println!(
-        "hda: emergency quiesce streams stopped={} ctl={:#x}",
-        streams_stopped,
-        r8(SD_BASE + SDCTL),
-    );
 
     w8(CORBCTL, 0);
     w8(RIRBCTL, 0);
     w32(DPLBASE, 0);
     w32(DPUBASE, 0);
-    crate::println!(
-        "hda: emergency quiesce DMA disabled corbctl={:#x} rirbctl={:#x}",
-        r8(CORBCTL),
-        r8(RIRBCTL),
-    );
 }
 
 pub struct Hda {

@@ -756,7 +756,6 @@ fn sys_reboot<A: crate::Arch>(machine: &mut A, a: &Args) -> SyscallResult {
     }
     crate::println!("linux reboot requested");
     crate::kernel::drivers::hda::emergency_quiesce();
-    crate::kernel::console::serial_log::flush();
     machine.reboot()
 }
 

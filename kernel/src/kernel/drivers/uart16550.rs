@@ -97,16 +97,7 @@ impl Uart16550 {
         Ok(inb(self.base()))
     }
 
-    /// Wait until the UART has shifted all queued bytes onto the wire.
-    pub fn flush(self, polls: u32) -> Result<(), UartError> {
-        if self.wait_ready(polls, 0x40) {
-            Ok(())
-        } else {
-            Err(UartError::Timeout)
-        }
-    }
-
-    /// Receive a byte without waiting. This is the bounded polling primitive
+    /// Receive one byte without waiting. This is the bounded polling primitive
     /// used by the pre-scheduler serial console.
     pub fn try_read_byte(self) -> Option<u8> {
         if inb(self.base() + 5) & 0x01 == 0 {

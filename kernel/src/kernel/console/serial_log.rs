@@ -92,19 +92,6 @@ pub fn write_byte(byte: u8) {
     }
 }
 
-/// Wait for the configured UART to finish transmitting buffered bytes.
-///
-/// This is used immediately before a hardware reboot so the final diagnostic
-/// lines are not stranded in the UART transmitter.
-pub fn flush() {
-    if STATE.load(Ordering::Relaxed) != LIVE {
-        return;
-    }
-    if let Some(uart) = selected_uart() {
-        let _ = uart.flush(TX_READY_POLLS);
-    }
-}
-
 /// Allow panic output to bypass attached-session ownership until the machine
 /// halts. This is intentionally one-way; no running session survives a panic.
 pub fn enter_emergency() {
