@@ -217,6 +217,9 @@ pub fn run<A: crate::Arch>(
                     crate::kernel::drivers::hda::emergency_quiesce();
                     machine.reboot()
                 }
+                ConsoleProtocolEvent::Control(ConsoleControl::Panic) => {
+                    panic!("serial control: panic requested");
+                }
                 ConsoleProtocolEvent::Input(InputEvent::Byte(byte)) => Some(InputEvent::Byte(byte)),
                 ConsoleProtocolEvent::Input(InputEvent::Scancode(scancode)) => {
                     if crate::kernel::keyboard::update_key_state(scancode) {

@@ -1042,6 +1042,11 @@ pub fn event_loop<A: crate::Arch>(
                     crate::kernel::drivers::hda::emergency_quiesce();
                     machine.reboot();
                 }
+                crate::kernel::console_protocol::ConsoleProtocolEvent::Control(
+                    crate::kernel::console_protocol::ConsoleControl::Panic,
+                ) => {
+                    panic!("serial control: panic requested");
+                }
                 crate::kernel::console_protocol::ConsoleProtocolEvent::Input(
                     crate::kernel::console_session::InputEvent::Scancode(scancode),
                 ) if crate::kernel::serial_console::ordinary_rx_allowed() => {

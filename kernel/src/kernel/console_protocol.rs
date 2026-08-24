@@ -17,12 +17,14 @@ const STX: u8 = 0x02;
 const ETX: u8 = 0x03;
 const REBOOT: u8 = 0x01;
 const KEY_EVENT: u8 = 0x02;
+const PANIC: u8 = 0x04;
 const MAX_FRAME: usize = 8;
 const FRAME_TIMEOUT_EPOCHS: u64 = 1_000_000;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ConsoleControl {
     Reboot,
+    Panic,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -132,6 +134,7 @@ impl ConsoleProtocolDecoder {
     fn decode_frame(&self, len: usize) -> Option<ConsoleProtocolEvent> {
         match self.frame.get(..len)? {
             [REBOOT] => Some(ConsoleProtocolEvent::Control(ConsoleControl::Reboot)),
+            [PANIC] => Some(ConsoleProtocolEvent::Control(ConsoleControl::Panic)),
             [KEY_EVENT, action, scancode] if *action <= 1 => {
                 let code = if *action == 0 { *scancode } else { *scancode | 0x80 };
                 Some(ConsoleProtocolEvent::Input(InputEvent::Scancode(code)))
@@ -147,7 +150,7 @@ impl Default for ConsoleProtocolDecoder {
 
 #[cfg(test)]
 mod tests {
-    use super::{ConsoleControl, ConsoleProtocolDecoder, ConsoleProtocolEvent, DLE, ETX, FRAME_TIMEOUT_EPOCHS, KEY_EVENT, REBOOT, STX};
+    use super::{ConsoleControl, ConsoleProtocolDecoder, ConsoleProtocolEvent, DLE, ETX, FRAME_TIMEOUT_EPOCHS, KEY_EVENT, PANIC, REBOOT, STX};
     use crate::kernel::console_session::InputEvent;
 
     fn frame(payload: &[u8]) -> alloc::vec::Vec<u8> {
@@ -181,6 +184,14 @@ mod tests {
         let mut decoder = ConsoleProtocolDecoder::new();
         assert_eq!(feed(&mut decoder, &frame(&[REBOOT])), alloc::vec![
             ConsoleProtocolEvent::Control(ConsoleControl::Reboot),
+        ]);
+    }
+
+    #[test]
+    fn panic_is_a_control_event() {
+        let mut decoder = ConsoleProtocolDecoder::new();
+        assert_eq!(feed(&mut decoder, &frame(&[PANIC])), alloc::vec![
+            ConsoleProtocolEvent::Control(ConsoleControl::Panic),
         ]);
     }
 

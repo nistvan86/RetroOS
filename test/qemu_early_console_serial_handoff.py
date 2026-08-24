@@ -63,6 +63,18 @@ def panic_early() -> int:
     return 0
 
 
+def panic_dos() -> int:
+    with QemuSerialTest() as qemu:
+        qemu.read_until(b"early> ")
+        qemu.send(b"resume\r")
+        qemu.read_until(b"Starting DN...")
+        qemu.send(frame(b"\x04"))  # PANIC control command
+        qemu.read_until(b"!!! KERNEL PANIC !!!")
+        qemu.read_until(b"serial control: panic requested")
+    print("PASS: QEMU panic emergency serial output with DOS personality")
+    return 0
+
+
 def reboot_early() -> int:
     with QemuSerialTest(no_reboot=False) as qemu:
         qemu.read_until(b"early> ")
@@ -94,6 +106,8 @@ def main() -> int:
         return key_sequence_early()
     if mode == "panic-early":
         return panic_early()
+    if mode == "panic-dos":
+        return panic_dos()
     if mode == "reboot-early":
         return reboot_early()
     if mode == "reboot-dos":
