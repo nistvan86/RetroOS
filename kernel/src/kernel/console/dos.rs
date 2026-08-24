@@ -6,6 +6,7 @@
 
 use crate::kernel::thread;
 use crate::Regs;
+use super::session::InputDisposition;
 
 pub struct DosConsoleAdapter<'a, A: crate::Arch> {
     dos: &'a mut thread::DosState<A>,
@@ -16,8 +17,9 @@ impl<'a, A: crate::Arch> DosConsoleAdapter<'a, A> {
         Self { dos }
     }
 
-    pub fn deliver_scancode(&mut self, machine: &mut A, regs: &mut Regs, scancode: u8) {
+    pub fn deliver_scancode(&mut self, machine: &mut A, regs: &mut Regs, scancode: u8) -> InputDisposition {
         self.dos.process_key(machine, regs, scancode);
+        InputDisposition::Consumed
     }
 }
 

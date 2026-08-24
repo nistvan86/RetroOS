@@ -40,99 +40,31 @@ pub fn dispatch<A: crate::Arch>(
     kt: &mut thread::KernelThread<A>,
     personality: &mut thread::Personality<A>,
     display: &mut Option<crate::kernel::display::Display>,
+    coordinator: &mut coordinator::ConsoleCoordinator,
     events: alloc::vec::Vec<crate::Irq>,
 ) {
-    let mut guest_events = alloc::vec::Vec::with_capacity(events.len());
-    for evt in events {
-        if let crate::Irq::Key(sc) = evt
-            && monitor_key(machine, &mut *bios_workspace, regs, sc, personality, display)
-        {
-            continue;
-        }
-        guest_events.push(evt);
-    }
-    match personality {
-        thread::Personality::Dos(dos) => {
-            let blocked = kt.state == thread::ThreadState::Blocked;
-            dispatch_dos(machine, regs, blocked, dos, guest_events);
-        }
-        thread::Personality::Linux(linux) => {
-            dispatch_linux(machine, regs, kt, linux, guest_events)
-        }
-        thread::Personality::Os2(_os2) => {
-            let mut tty = stream::StreamConsoleAdapter::from_fds(&kt.fds);
-            for evt in guest_events {
-                if let (Some(tty), crate::Irq::Key(scancode)) = (&mut tty, evt) {
-                    tty.deliver_scancode(scancode);
+    let blocked = kt.state == thread::ThreadState::Blocked;
+    for event in events {
+        match event {
+            crate::Irq::Key(scancode) => {
+                if monitor_key(machine, &mut *bios_workspace, regs, scancode, personality, display) {
+                    continue;
+                }
+                let _ = coordinator.deliver_personality(
+                    machine,
+                    regs,
+                    kt,
+                    personality,
+                    crate::kernel::console_session::InputEvent::Scancode(scancode),
+                );
+            }
+            event if matches!(personality, thread::Personality::Dos(_)) && !blocked => {
+                if let thread::Personality::Dos(dos) = personality {
+                    crate::kernel::dos::queue_irq(machine, dos, regs, event);
                 }
             }
+            _ => {}
         }
-        thread::Personality::Windows(_windows) => {
-            let mut tty = stream::StreamConsoleAdapter::from_fds(&kt.fds);
-            for evt in guest_events {
-                if let (Some(tty), crate::Irq::Key(scancode)) = (&mut tty, evt) {
-                    tty.deliver_scancode(scancode);
-                }
-            }
-        }
-    }
-}
-
-/// Deliver already-decoded serial bytes through the existing pipe-backed TTY
-/// adapter. DOS bytes are translated before this point and therefore do not
-/// enter this path.
-pub fn dispatch_serial_bytes<A: crate::Arch>(
-    kt: &thread::KernelThread<A>,
-    personality: &mut thread::Personality<A>,
-    bytes: &[u8],
-) {
-    let tty = match personality {
-        thread::Personality::Linux(_)
-        | thread::Personality::Os2(_)
-        | thread::Personality::Windows(_) => {
-            stream::StreamConsoleAdapter::from_fds(&kt.fds)
-        }
-        thread::Personality::Dos(_) => None,
-    };
-    let Some(mut tty) = tty else { return };
-    for &byte in bytes {
-        tty.deliver_byte(byte);
-    }
-}
-
-/// DOS owner: `blocked` selects the stdin-pipe path (owner is wait4-parked
-/// behind a foreground Linux child).
-fn dispatch_dos<A: crate::Arch>(
-    machine: &mut A,
-    regs: &mut Regs,
-    blocked: bool,
-    dos: &mut thread::DosState<A>,
-    events: alloc::vec::Vec<crate::Irq>,
-) {
-    let dp = dos as *mut thread::DosState<A>;
-    {
-        for evt in events {
-        if let crate::Irq::Key(sc) = evt {
-            if blocked {
-                if crate::kernel::keyboard::update_key_state(sc) {
-                    let c = crate::kernel::keyboard::scancode_to_ascii(sc);
-                    if c != 0 {
-                        crate::term::putchar(c);
-                        crate::kernel::term::mark_dirty();
-                        let cpipe = thread::console_pipe();
-                        crate::kernel::kpipe::write(cpipe, &[c]);
-                    }
-                }
-            } else {
-                let mut adapter = dos::DosConsoleAdapter::new(unsafe { &mut *dp });
-                adapter.deliver_scancode(machine, regs, sc);
-            }
-        } else {
-            if !blocked {
-                crate::kernel::dos::queue_irq(machine, unsafe { &mut *dp }, regs, evt);
-            }
-        }
-    }
     }
 }
 
@@ -191,25 +123,6 @@ pub fn restore_from_monitor<A: crate::Arch>(
     }
 }
 
-/// Linux owner: keys → cooked fd input.
-fn dispatch_linux<A: crate::Arch>(
-    machine: &mut A,
-    _regs: &mut Regs,
-    kt: &mut thread::KernelThread<A>,
-    linux: &mut thread::LinuxState,
-    events: alloc::vec::Vec<crate::Irq>,
-) {
-    let _ = machine;
-    let _ = linux;
-    let Some(mut tty) = stream::StreamConsoleAdapter::from_fds(&kt.fds) else {
-        return;
-    };
-    for evt in events {
-        if let crate::Irq::Key(scancode) = evt {
-            tty.deliver_scancode(scancode);
-        }
-    }
-}
 
 // =============================================================================
 // The console role: holding the display

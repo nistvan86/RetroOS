@@ -1114,52 +1114,32 @@ pub fn event_loop<A: crate::Arch>(
     loop {
         stats.slice_begin(machine);
         stats.iteration(machine);
-        let mut serial_keys = alloc::vec::Vec::new();
-        let mut serial_bytes = alloc::vec::Vec::new();
-        while let Some(event) = crate::kernel::serial_console::try_read_event() {
+        let mut serial_inputs = alloc::vec::Vec::new();
+        while let Some(event) = coordinator.poll() {
             match event {
-                crate::kernel::console_protocol::ConsoleProtocolEvent::Control(
-                    crate::kernel::console_protocol::ConsoleControl::Reboot,
+                crate::kernel::console::coordinator::CoordinatorEvent::Control(
+                    crate::kernel::console::coordinator::ConsoleControl::Reboot,
                 ) => {
                     crate::println!("serial control: reboot requested");
                     crate::kernel::drivers::hda::emergency_quiesce();
                     machine.reboot();
                 }
-                crate::kernel::console_protocol::ConsoleProtocolEvent::Control(
-                    crate::kernel::console_protocol::ConsoleControl::Panic,
+                crate::kernel::console::coordinator::CoordinatorEvent::Control(
+                    crate::kernel::console::coordinator::ConsoleControl::Panic,
                 ) => {
                     panic!("serial control: panic requested");
                 }
-                crate::kernel::console_protocol::ConsoleProtocolEvent::Input(
-                    crate::kernel::console_session::InputEvent::Scancode(scancode),
-                ) if crate::kernel::serial_console::ordinary_rx_allowed() => {
-                    serial_keys.push(crate::Irq::Key(scancode));
+                crate::kernel::console::coordinator::CoordinatorEvent::Input(input) => {
+                    serial_inputs.push(input);
                 }
-                crate::kernel::console_protocol::ConsoleProtocolEvent::Input(
-                    crate::kernel::console_session::InputEvent::Byte(byte),
-                ) if crate::kernel::serial_console::ordinary_rx_allowed()
-                    && matches!(&threads[ctx.tid].personality, thread::Personality::Dos(_)) => {
-                    let mut scancodes = [0; 4];
-                    let count = crate::kernel::console_dos::ascii_to_scancodes(byte, &mut scancodes);
-                    for &scancode in &scancodes[..count] {
-                        serial_keys.push(crate::Irq::Key(scancode));
-                    }
-                }
-                crate::kernel::console_protocol::ConsoleProtocolEvent::Input(
-                    crate::kernel::console_session::InputEvent::Byte(byte),
-                ) if crate::kernel::serial_console::ordinary_rx_allowed() => {
-                    serial_bytes.push(byte);
-                }
-                crate::kernel::console_protocol::ConsoleProtocolEvent::Input(
-                    crate::kernel::console_session::InputEvent::Scancode(_),
-                )
-                | crate::kernel::console_protocol::ConsoleProtocolEvent::Input(
-                    crate::kernel::console_session::InputEvent::Byte(_),
-                ) => {}
             }
         }
         let mut events = crate::kernel::irq_dispatch::drain(machine);
-        events.extend(serial_keys);
+        for input in serial_inputs.iter().copied() {
+            if let crate::kernel::console_session::InputEvent::Scancode(scancode) = input {
+                events.push(crate::Irq::Key(scancode));
+            }
+        }
         stats.part(machine, 1);
         let tick_wakeup = events
             .iter()
@@ -1230,13 +1210,20 @@ pub fn event_loop<A: crate::Arch>(
             &mut thread.kernel,
             &mut thread.personality,
             &mut display,
+            coordinator,
             events,
         );
-        crate::kernel::console::dispatch_serial_bytes(
-            &thread.kernel,
-            &mut thread.personality,
-            &serial_bytes,
-        );
+        for input in serial_inputs {
+            if let crate::kernel::console_session::InputEvent::Byte(byte) = input {
+                let _ = coordinator.deliver_personality(
+                    machine,
+                    &mut ctx.regs,
+                    &mut thread.kernel,
+                    &mut thread.personality,
+                    crate::kernel::console_session::InputEvent::Byte(byte),
+                );
+            }
+        }
         stats.part(machine, 3);
         thread
             .personality

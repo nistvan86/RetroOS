@@ -84,6 +84,78 @@ impl ConsoleCoordinator {
             InputDisposition::Ignored
         }
     }
+
+    /// Deliver one runtime personality event using operation-scoped adapter
+    /// borrows. The coordinator owns routing policy, while kpipe and DOS BIOS
+    /// state remain authoritative in their existing owners.
+    pub fn deliver_personality<A: crate::Arch>(
+        &mut self,
+        machine: &mut A,
+        regs: &mut crate::Regs,
+        kt: &mut crate::kernel::thread::KernelThread<A>,
+        personality: &mut crate::kernel::thread::Personality<A>,
+        input: InputEvent,
+    ) -> InputDisposition {
+        if self.target != ConsoleTarget::Personality {
+            return InputDisposition::Ignored;
+        }
+        match personality {
+            crate::kernel::thread::Personality::Linux(_)
+            | crate::kernel::thread::Personality::Os2(_)
+            | crate::kernel::thread::Personality::Windows(_) => {
+                let Some(mut stream) = super::stream::StreamConsoleAdapter::from_fds(&kt.fds)
+                else {
+                    return InputDisposition::Ignored;
+                };
+                match input {
+                    InputEvent::Scancode(scancode) => stream.deliver_scancode(scancode),
+                    InputEvent::Byte(byte) => stream.deliver_byte(byte),
+                }
+            }
+            crate::kernel::thread::Personality::Dos(dos) => {
+                if kt.state == crate::kernel::thread::ThreadState::Blocked {
+                    return deliver_blocked_dos(input);
+                }
+                let dos_ptr = &mut **dos as *mut crate::kernel::thread::DosState<A>;
+                let mut adapter = super::dos::DosConsoleAdapter::new(unsafe { &mut *dos_ptr });
+                match input {
+                    InputEvent::Scancode(scancode) => {
+                        adapter.deliver_scancode(machine, regs, scancode)
+                    }
+                    InputEvent::Byte(byte) => {
+                        let mut scancodes = [0; 4];
+                        let count = super::dos::ascii_to_scancodes(byte, &mut scancodes);
+                        let mut disposition = InputDisposition::Ignored;
+                        for &scancode in &scancodes[..count] {
+                            disposition = adapter.deliver_scancode(machine, regs, scancode);
+                        }
+                        disposition
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn deliver_blocked_dos(input: InputEvent) -> InputDisposition {
+    let byte = match input {
+        InputEvent::Scancode(scancode) => {
+            if !crate::kernel::keyboard::update_key_state(scancode) {
+                return InputDisposition::Ignored;
+            }
+            crate::kernel::keyboard::scancode_to_ascii(scancode)
+        }
+        InputEvent::Byte(byte) => byte,
+    };
+    if byte == 0 {
+        return InputDisposition::Ignored;
+    }
+    crate::term::putchar(byte);
+    crate::kernel::term::mark_dirty();
+    let cpipe = crate::kernel::thread::console_pipe();
+    (crate::kernel::kpipe::write(cpipe, &[byte]) == 1)
+        .then_some(InputDisposition::Consumed)
+        .unwrap_or(InputDisposition::Ignored)
 }
 
 fn map_protocol_event(

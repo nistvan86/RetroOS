@@ -6,6 +6,7 @@
 
 use crate::kernel::{keyboard, kpipe, term};
 use crate::kernel::thread::{FdKind, MAX_FDS};
+use super::session::InputDisposition;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct StreamConsoleAdapter {
@@ -26,19 +27,22 @@ impl StreamConsoleAdapter {
 
     /// Convert a local keyboard scancode using the existing shared keyboard
     /// state and deliver the resulting byte directly to the existing kpipe.
-    pub fn deliver_scancode(&mut self, scancode: u8) {
+    pub fn deliver_scancode(&mut self, scancode: u8) -> InputDisposition {
         if !keyboard::update_key_state(scancode) {
-            return;
+            return InputDisposition::Ignored;
         }
         let byte = keyboard::scancode_to_ascii(scancode);
-        if byte != 0 {
-            self.deliver_byte(byte);
+        if byte == 0 {
+            return InputDisposition::Ignored;
         }
+        self.deliver_byte(byte)
     }
 
     /// Deliver already-translated transport input without adding a queue.
-    pub fn deliver_byte(&mut self, byte: u8) {
-        let _ = kpipe::write(self.input_pipe, &[byte]);
+    pub fn deliver_byte(&mut self, byte: u8) -> InputDisposition {
+        (kpipe::write(self.input_pipe, &[byte]) == 1)
+            .then_some(InputDisposition::Consumed)
+            .unwrap_or(InputDisposition::Ignored)
     }
 }
 
