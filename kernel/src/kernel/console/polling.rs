@@ -96,7 +96,7 @@ pub fn run<A: crate::Arch>(
         for input in [serial_input, local_input].into_iter().flatten() {
             let mut command = [0; 256];
             let mut command_len = 0;
-            let mut post_exec = None;
+
             let action = {
                 let delivery = coordinator.deliver_kernel(
                     KernelConsoleInputContext {
@@ -110,7 +110,7 @@ pub fn run<A: crate::Arch>(
                     if let Some(path) = delivery.exec_path() {
                         command_len = path.len();
                         command[..command_len].copy_from_slice(path);
-                        post_exec = delivery.post_exec;
+
                     }
                 }
                 action
@@ -123,8 +123,7 @@ pub fn run<A: crate::Arch>(
                     EarlyConsoleAction::Boot
                 }
                 KernelConsoleAction::Exec if command_len != 0 => {
-                    boot.set_cmdline(&command[..command_len]);
-                    boot.set_post_exec(post_exec);
+                    boot.set_one_shot(&command[..command_len]);
                     EarlyConsoleAction::Exec
                 }
                 KernelConsoleAction::Exec => continue,

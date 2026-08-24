@@ -19,7 +19,7 @@ pub struct KernelConsole {
     exec: [u8; 256],
     exec_len: usize,
     pending_action: Option<KernelConsoleAction>,
-    post_exec: Option<arch_abi::PostExecAction>,
+
 }
 
 impl KernelConsole {
@@ -31,7 +31,6 @@ impl KernelConsole {
             exec: [0; 256],
             exec_len: 0,
             pending_action: None,
-            post_exec: Some(arch_abi::PostExecAction::ReturnToKernelConsole),
         }
     }
 
@@ -88,22 +87,10 @@ impl KernelConsole {
             return Some(KernelConsoleAction::Panic);
         }
         if command.starts_with(b"exec ") {
-            let mut path = &command[5..];
-            let mut post_exec = arch_abi::PostExecAction::ReturnToKernelConsole;
-            for (option, action) in [
-                (b"--and-halt " as &[u8], arch_abi::PostExecAction::Shutdown),
-                (b"--and-reboot " as &[u8], arch_abi::PostExecAction::Reboot),
-            ] {
-                if path.starts_with(option) {
-                    path = &path[option.len()..];
-                    post_exec = action;
-                    break;
-                }
-            }
+            let path = &command[5..];
             if !path.is_empty() && path.len() <= self.exec.len() {
                 self.exec[..path.len()].copy_from_slice(path);
                 self.exec_len = path.len();
-                self.post_exec = Some(post_exec);
                 return Some(KernelConsoleAction::Exec);
             }
         }
@@ -116,7 +103,7 @@ impl KernelConsole {
             return;
         }
         match &self.line[..self.len] {
-            b"help" => write_bytes(out, b"commands: help info boot reboot panic exec [--and-halt|--and-reboot] <path> [args]\r\n"),
+            b"help" => write_bytes(out, b"commands: help info boot reboot panic exec <path> [args]\r\n"),
             b"info" => write_bytes(out, b"boot monitor: paging active\r\n"),
             b"boot" | b"reboot" | b"panic" => {}
             command if command.starts_with(b"exec ") => {
@@ -130,7 +117,6 @@ impl KernelConsole {
         (self.exec_len != 0).then_some(&self.exec[..self.exec_len])
     }
 
-    pub fn post_exec(&self) -> Option<arch_abi::PostExecAction> { self.post_exec }
 
     pub fn take_action(&mut self) -> Option<KernelConsoleAction> {
         self.pending_action.take()
@@ -195,7 +181,7 @@ mod tests {
     fn echoes_line_and_help_response() {
         let mut console = KernelConsole::new();
         let (output, _) = send(&mut console, b"help\r");
-        assert_eq!(output, b"help\r\ncommands: help info boot reboot panic exec [--and-halt|--and-reboot] <path> [args]\r\nbootmon> ");
+        assert_eq!(output, b"help\r\ncommands: help info boot reboot panic exec <path> [args]\r\nbootmon> ");
     }
 
     #[test]
@@ -213,25 +199,7 @@ mod tests {
         assert_eq!(console.exec_command(), Some(&b"TESTS/X.COM arg"[..]));
     }
 
-    #[test]
-    fn exec_post_action_options_are_explicit() {
-        let mut console = KernelConsole::new();
-        let (_, action) = send(&mut console, b"exec /host/STUB.COM arg\r");
-        assert_eq!(action, Some(KernelConsoleAction::Exec));
-        assert_eq!(console.exec_command(), Some(&b"/host/STUB.COM arg"[..]));
-        assert_eq!(
-            console.post_exec(),
-            Some(arch_abi::PostExecAction::ReturnToKernelConsole)
-        );
 
-        let (_, action) = send(&mut console, b"exec --and-halt /host/STUB.COM\r");
-        assert_eq!(action, Some(KernelConsoleAction::Exec));
-        assert_eq!(console.post_exec(), Some(arch_abi::PostExecAction::Shutdown));
-
-        let (_, action) = send(&mut console, b"exec --and-reboot /host/STUB.COM\r");
-        assert_eq!(action, Some(KernelConsoleAction::Exec));
-        assert_eq!(console.post_exec(), Some(arch_abi::PostExecAction::Reboot));
-    }
 
     #[test]
     fn exec_without_path_is_rejected() {

@@ -40,7 +40,7 @@ pub struct KernelConsoleDelivery {
     pub action: Option<KernelConsoleAction>,
     exec: [u8; 256],
     exec_len: usize,
-    pub post_exec: Option<arch_abi::PostExecAction>,
+
 }
 
 impl KernelConsoleDelivery {
@@ -106,7 +106,7 @@ impl ConsoleCoordinator {
             action: None,
             exec: [0; 256],
             exec_len: 0,
-            post_exec: None,
+
         };
         if !matches!(self.target, ConsoleTarget::Kernel) {
             return result;
@@ -126,7 +126,7 @@ impl ConsoleCoordinator {
             if let Some(path) = session.endpoint_mut().exec_command() {
                 result.exec_len = path.len();
                 result.exec[..result.exec_len].copy_from_slice(path);
-                result.post_exec = session.endpoint_mut().post_exec();
+
             }
         }
         result

@@ -86,16 +86,6 @@ impl BootModule {
 pub type BootPhysicalReader = fn(u64, &mut [u8]) -> bool;
 
 
-/// Action to take after a console-requested executable exits.
-///
-/// `None` in `BootConfig` means the executable was selected by the normal
-/// CONFIG.SYS/boot path, which retains its existing continuation behavior.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum PostExecAction {
-    ReturnToKernelConsole,
-    Shutdown,
-    Reboot,
-}
 
 
 /// Boot-time platform configuration, read once by the platform entry point and
@@ -110,7 +100,10 @@ pub enum PostExecAction {
 pub struct BootConfig {
     cmdline: [u8; 4096],
     cmdline_len: Option<usize>, // None = no headless cmdline (interactive DN loop)
-    post_exec: Option<PostExecAction>,
+    init: [u8; 256],
+    init_len: Option<usize>,
+    one_shot: [u8; 4096],
+    one_shot_len: Option<usize>,
     cwd: [u8; 256],
     cwd_len: Option<usize>,
     /// VFS subtree that DOS drive `C:` maps to (normalized: no leading `/`, one
@@ -161,7 +154,8 @@ impl BootConfig {
     pub const fn empty() -> Self {
         let mut cfg = BootConfig {
             cmdline: [0; 4096], cmdline_len: None,
-            post_exec: None,
+            init: [0; 256], init_len: None,
+            one_shot: [0; 4096], one_shot_len: None,
             cwd: [0; 256], cwd_len: None,
             c_root: [0; 128], c_root_len: 0,
             debug_watch: None, is_qemu: false, audio_mixed: false,
@@ -205,6 +199,12 @@ impl BootConfig {
         cmdline::for_each_token(s, |token| {
             if cmdline::eq_ignore_ascii_case(token, b"bootmon") {
                 self.bootmon = true;
+            } else if let Some((key, value)) = cmdline::parse_key_value(token) {
+                if cmdline::key_eq(key, b"init") && !value.is_empty() {
+                    let n = value.len().min(self.init.len());
+                    self.init[..n].copy_from_slice(&value[..n]);
+                    self.init_len = (n == value.len()).then_some(n);
+                }
             }
         });
     }
@@ -214,14 +214,29 @@ impl BootConfig {
     /// Clear the pending launch command so normal interactive startup is used.
     pub fn clear_launch_cmdline(&mut self) {
         self.cmdline_len = None;
-        self.post_exec = None;
     }
 
-    pub fn set_post_exec(&mut self, action: Option<PostExecAction>) {
-        self.post_exec = action;
+    pub fn set_init_path(&mut self, path: &[u8]) -> bool {
+        if path.is_empty() || path.len() > self.init.len() { return false; }
+        self.init[..path.len()].copy_from_slice(path);
+        self.init_len = Some(path.len());
+        true
     }
 
-    pub fn post_exec(&self) -> Option<PostExecAction> { self.post_exec }
+    pub fn clear_init_path(&mut self) { self.init_len = None; }
+    pub fn init_path(&self) -> Option<&[u8]> { self.init_len.map(|n| &self.init[..n]) }
+
+    pub fn set_one_shot(&mut self, command: &[u8]) -> bool {
+        if command.is_empty() || command.len() > self.one_shot.len() { return false; }
+        self.one_shot[..command.len()].copy_from_slice(command);
+        self.one_shot_len = Some(command.len());
+        true
+    }
+
+    pub fn clear_one_shot(&mut self) { self.one_shot_len = None; }
+    pub fn one_shot(&self) -> Option<&[u8]> {
+        self.one_shot_len.map(|n| &self.one_shot[..n])
+    }
 
     /// Record the headless command line (semicolon-separated program list).
     pub fn set_cmdline(&mut self, s: &[u8]) {
@@ -277,6 +292,27 @@ mod boot_config_tests {
         let mut config = BootConfig::empty();
         config.set_cmdline(b"bootmonitor bootmon=true");
         assert!(!config.bootmon());
+    }
+
+    #[test]
+    fn init_override_is_bounded_and_preserves_service_assignments() {
+        let mut config = BootConfig::empty();
+        config.set_cmdline(b"hostfs=com2 serial=com1 init=/bin/sh");
+        assert_eq!(config.init_path(), Some(&b"/bin/sh"[..]));
+        assert_eq!(config.hostfs_port, Some(ComPort::Com2));
+        assert_eq!(config.serial_console_port, Some(ComPort::Com1));
+        assert!(!config.set_init_path(b""));
+    }
+
+    #[test]
+    fn one_shot_selection_is_independent_from_default_cmdline() {
+        let mut config = BootConfig::empty();
+        config.set_cmdline(b"TESTS/X.COM arg");
+        assert!(config.set_one_shot(b"/host/STUB.COM q"));
+        assert_eq!(config.one_shot(), Some(&b"/host/STUB.COM q"[..]));
+        assert_eq!(config.cmdline(), Some(&b"TESTS/X.COM arg"[..]));
+        config.clear_one_shot();
+        assert_eq!(config.one_shot(), None);
     }
 
     #[test]
