@@ -1,6 +1,6 @@
 //! Polling driver for the kernel console during EarlyBoot and KernelReady.
 
-use super::coordinator::{ConsoleControl, ConsoleCoordinator, CoordinatorEvent};
+use super::coordinator::{ConsoleControl, ConsoleCoordinator, CoordinatorEvent, KernelConsoleInputContext};
 use super::kernel::{KernelConsoleAction, KernelConsolePhase};
 use super::session::{ConsoleSession, ConsoleSettings, InputEvent, OutputAttachment};
 
@@ -105,20 +105,19 @@ pub fn run<A: crate::Arch>(
             let mut command_len = 0;
             let mut post_exec = None;
             let action = {
-                let endpoint = coordinator.kernel_console_mut().expect("kernel console attached");
-                let mut session = ConsoleSession::new(
-                    endpoint,
-                    &mut video,
-                    serial_attached.then_some(&mut serial),
-                    ConsoleSettings::default(),
+                let delivery = coordinator.deliver_kernel(
+                    KernelConsoleInputContext {
+                        video: &mut video,
+                        serial: serial_attached.then_some(&mut serial),
+                    },
+                    input,
                 );
-                session.input(input);
-                let action = session.endpoint_mut().take_action();
+                let action = delivery.action;
                 if action == Some(KernelConsoleAction::Exec) {
-                    if let Some(path) = session.endpoint_mut().exec_command() {
+                    if let Some(path) = delivery.exec_path() {
                         command_len = path.len();
                         command[..command_len].copy_from_slice(path);
-                        post_exec = session.endpoint_mut().post_exec();
+                        post_exec = delivery.post_exec;
                     }
                 }
                 action

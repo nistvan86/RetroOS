@@ -1,9 +1,9 @@
 //! Phase-independent ownership and routing for the single active console.
 
-use super::kernel::{KernelConsole, KernelConsolePhase};
+use super::kernel::{KernelConsole, KernelConsoleAction, KernelConsolePhase};
 use super::protocol::{ConsoleControl as ProtocolControl, ConsoleProtocolEvent};
 use super::serial;
-use super::session::{InputEvent, InputDisposition, OutputOrigin};
+use super::session::{ConsoleSession, ConsoleSettings, InputEvent, InputDisposition, OutputAttachment, OutputOrigin};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ConsoleTarget {
@@ -28,6 +28,25 @@ pub struct ConsoleCoordinator {
     target: ConsoleTarget,
     serial_attached: bool,
     kernel_console: KernelConsole,
+}
+
+pub struct KernelConsoleInputContext<'a, V: OutputAttachment, S: OutputAttachment> {
+    pub video: &'a mut V,
+    pub serial: Option<&'a mut S>,
+}
+
+pub struct KernelConsoleDelivery {
+    pub disposition: InputDisposition,
+    pub action: Option<KernelConsoleAction>,
+    exec: [u8; 256],
+    exec_len: usize,
+    pub post_exec: Option<arch_abi::PostExecAction>,
+}
+
+impl KernelConsoleDelivery {
+    pub fn exec_path(&self) -> Option<&[u8]> {
+        (self.exec_len != 0).then_some(&self.exec[..self.exec_len])
+    }
 }
 
 impl ConsoleCoordinator {
@@ -77,12 +96,40 @@ impl ConsoleCoordinator {
         map_protocol_event(event, serial::ordinary_rx_allowed())
     }
 
-    pub fn deliver_kernel(&mut self, _input: InputEvent) -> InputDisposition {
-        if matches!(self.target, ConsoleTarget::Kernel(_)) {
-            InputDisposition::Consumed
-        } else {
-            InputDisposition::Ignored
+    pub fn deliver_kernel<V: OutputAttachment, S: OutputAttachment>(
+        &mut self,
+        context: KernelConsoleInputContext<'_, V, S>,
+        input: InputEvent,
+    ) -> KernelConsoleDelivery {
+        let mut result = KernelConsoleDelivery {
+            disposition: InputDisposition::Ignored,
+            action: None,
+            exec: [0; 256],
+            exec_len: 0,
+            post_exec: None,
+        };
+        if !matches!(self.target, ConsoleTarget::Kernel(_)) {
+            return result;
         }
+        let Some(endpoint) = self.kernel_console_mut() else {
+            return result;
+        };
+        let mut session = ConsoleSession::new(
+            endpoint,
+            context.video,
+            context.serial,
+            ConsoleSettings::default(),
+        );
+        result.disposition = session.input(input);
+        result.action = session.endpoint_mut().take_action();
+        if result.action == Some(KernelConsoleAction::Exec) {
+            if let Some(path) = session.endpoint_mut().exec_command() {
+                result.exec_len = path.len();
+                result.exec[..result.exec_len].copy_from_slice(path);
+                result.post_exec = session.endpoint_mut().post_exec();
+            }
+        }
+        result
     }
 
     /// Deliver one runtime personality event using operation-scoped adapter
@@ -206,10 +253,22 @@ impl Drop for ConsoleCoordinator {
 
 #[cfg(test)]
 mod tests {
-    use super::{map_protocol_event, ConsoleControl, ConsoleCoordinator, ConsoleTarget, CoordinatorEvent};
+    use super::{
+        map_protocol_event, ConsoleControl, ConsoleCoordinator, ConsoleTarget, CoordinatorEvent,
+        KernelConsoleAction, KernelConsoleInputContext,
+    };
     use crate::kernel::console::kernel::KernelConsolePhase;
     use crate::kernel::console::protocol::{ConsoleControl as ProtocolControl, ConsoleProtocolEvent};
-    use crate::kernel::console::session::{InputEvent, OutputOrigin};
+    use crate::kernel::console::session::{
+        InputDisposition, InputEvent, OutputAttachment, OutputOrigin,
+    };
+
+    #[derive(Default)]
+    struct Sink(alloc::vec::Vec<u8>);
+
+    impl OutputAttachment for Sink {
+        fn write_byte(&mut self, byte: u8) { self.0.push(byte); }
+    }
 
     #[test]
     fn protocol_controls_are_admitted_without_an_endpoint() {
@@ -242,6 +301,59 @@ mod tests {
         assert!(super::output_serial(OutputOrigin::StreamConsole));
         assert!(!super::output_local(OutputOrigin::EndpointRendered));
         assert!(super::output_serial(OutputOrigin::EndpointRendered));
+    }
+
+    #[test]
+    fn kernel_delivery_fans_out_echo_in_both_phases() {
+        for phase in [KernelConsolePhase::EarlyBoot, KernelConsolePhase::KernelReady] {
+            let mut coordinator = ConsoleCoordinator::new();
+            coordinator.attach_kernel(phase);
+            let mut video = Sink::default();
+            let mut serial = Sink::default();
+            let mut last = None;
+            for &byte in b"help\r" {
+                last = Some(coordinator.deliver_kernel(
+                    KernelConsoleInputContext {
+                        video: &mut video,
+                        serial: Some(&mut serial),
+                    },
+                    InputEvent::Byte(byte),
+                ));
+            }
+            assert_eq!(last.unwrap().disposition, InputDisposition::Consumed);
+            assert_eq!(video.0, serial.0);
+            assert!(video.0.windows(b"commands: help".len())
+                .any(|window| window == b"commands: help"));
+        }
+    }
+
+    #[test]
+    fn kernel_delivery_preserves_phase_gated_boot() {
+        let mut early = ConsoleCoordinator::new();
+        early.attach_kernel(KernelConsolePhase::EarlyBoot);
+        let mut video = Sink::default();
+        let mut last = None;
+        for &byte in b"boot\r" {
+            last = Some(early.deliver_kernel(
+                KernelConsoleInputContext { video: &mut video, serial: None::<&mut Sink> },
+                InputEvent::Byte(byte),
+            ));
+        }
+        assert_eq!(last.unwrap().action, Some(KernelConsoleAction::Boot));
+
+        let mut ready = ConsoleCoordinator::new();
+        ready.attach_kernel(KernelConsolePhase::KernelReady);
+        let mut video = Sink::default();
+        let mut last = None;
+        for &byte in b"boot\r" {
+            last = Some(ready.deliver_kernel(
+                KernelConsoleInputContext { video: &mut video, serial: None::<&mut Sink> },
+                InputEvent::Byte(byte),
+            ));
+        }
+        assert_eq!(last.unwrap().action, None);
+        assert!(video.0.windows(b"only available".len())
+            .any(|window| window == b"only available"));
     }
 
     #[test]
