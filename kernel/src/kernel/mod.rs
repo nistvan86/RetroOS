@@ -34,13 +34,6 @@ pub mod stacktrace;
 // ── Kernel APIs the personalities call: one surface per resource class ───
 pub mod block;
 pub mod console;
-pub use console::dos as console_dos;
-pub use console::polling as early_console;
-pub use console::protocol as console_protocol;
-pub use console::serial as serial_console;
-pub use console::serial_log;
-pub use console::session as console_session;
-pub use console::stream as console_tty;
 pub mod display;
 pub mod keyboard;
 pub mod kpipe;
