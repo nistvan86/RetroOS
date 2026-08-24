@@ -28,7 +28,7 @@ timeout --kill-after=5s 20s qemu-system-i386 \
     -m 64M -display none -no-reboot \
     -serial "file:$serial_log" \
     -debugcon "file:$debug_log" \
-    -fw_cfg "name=opt/cmdline,string=serial=com1 console=early" \
+    -fw_cfg "name=opt/cmdline,string=serial=com1 bootmon" \
     >/dev/null 2>&1
 status=$?
 set -e
@@ -36,17 +36,17 @@ set -e
 case "$status" in
     124|137|143) ;;
     *)
-        echo "QEMU did not stop in the early console (status $status)" >&2
+        echo "QEMU did not stop in the boot monitor (status $status)" >&2
         exit "$status"
         ;;
 esac
 
-grep -aFq 'RetroOS early console' "$serial_log"
-test "$(grep -aFc 'RetroOS early console' "$serial_log")" -eq 1
+grep -aFq 'RetroOS boot monitor' "$serial_log"
+test "$(grep -aFc 'RetroOS boot monitor' "$serial_log")" -eq 1
 test "$(grep -aFc 'Block devices initialized' "$serial_log")" -eq 0
 
 # Attached-session output is direct to the serial session; it must not also be
 # emitted through the ambient debugcon mirror.
-test "$(grep -aFc 'RetroOS early console' "$debug_log")" -eq 0
+test "$(grep -aFc 'RetroOS boot monitor' "$debug_log")" -eq 0
 
 echo "PASS: QEMU early console"

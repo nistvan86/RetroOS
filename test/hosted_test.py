@@ -70,8 +70,8 @@ def parse_keys(script):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--cmd", help="DOS program to launch headless (else boots to DN)")
-    ap.add_argument("--console-stage", choices=("early", "kernel"),
-                    help="stop at the no-serial kernel console before personality startup")
+    ap.add_argument("--bootmon", action="store_true",
+                    help="stop at the pre-runtime boot monitor before personality startup")
     ap.add_argument("--cwd", help="working directory on the guest disk")
     ap.add_argument("--image", default="bazel-bin/image.bin",
                     help="disk image (default: the open-source image)")
@@ -115,8 +115,8 @@ def main():
     if args.cmd:
         cmdline += ["--cmd", args.cmd]
         cmdline += ["--cwd", args.cwd or (os.path.dirname(args.cmd) + "/")]
-    if args.console_stage:
-        cmdline += ["--console-stage", args.console_stage]
+    if args.bootmon:
+        cmdline += ["--bootmon"]
     cmdline.append(args.image)
 
     # Drive keys on stdin; capture the kernel log from stderr (the 0xE9 sink).

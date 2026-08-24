@@ -10,7 +10,7 @@ import time
 
 
 class QemuSerialTest:
-    def __init__(self, cmdline: str = "serial=com1 console=early", no_reboot: bool = True):
+    def __init__(self, cmdline: str = "serial=com1 bootmon", no_reboot: bool = True):
         self.cmdline = cmdline
         self.no_reboot = no_reboot
         self.output = bytearray()

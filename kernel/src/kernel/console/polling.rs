@@ -59,12 +59,12 @@ pub fn run<A: crate::Arch>(
             ConsoleSettings::default(),
         );
         session.write_bytes(match phase {
-            KernelConsolePhase::EarlyBoot => b"RetroOS early console\r\n",
+            KernelConsolePhase::EarlyBoot => b"RetroOS boot monitor\r\n",
             KernelConsolePhase::KernelReady => b"RetroOS kernel console\r\n",
         });
         session.write_bytes(b"type help for commands\r\n");
         session.write_bytes(match phase {
-            KernelConsolePhase::EarlyBoot => b"early> ",
+            KernelConsolePhase::EarlyBoot => b"bootmon> ",
             KernelConsolePhase::KernelReady => b"kernel> ",
         });
     }

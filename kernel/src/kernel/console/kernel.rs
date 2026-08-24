@@ -45,7 +45,7 @@ impl KernelConsole {
 
     pub fn prompt(&self, out: &mut dyn EchoSink) {
         let prompt = match self.phase {
-            KernelConsolePhase::EarlyBoot => b"early> " as &[u8],
+            KernelConsolePhase::EarlyBoot => b"bootmon> " as &[u8],
             KernelConsolePhase::KernelReady => b"kernel> " as &[u8],
         };
         write_bytes(out, prompt);
@@ -135,7 +135,7 @@ impl KernelConsole {
         match &self.line[..self.len] {
             b"help" => write_bytes(out, b"commands: help info boot reboot panic exec [--and-halt|--and-reboot] <path> [args]\r\n"),
             b"info" => match self.phase {
-                KernelConsolePhase::EarlyBoot => write_bytes(out, b"early console: paging active\r\n"),
+                KernelConsolePhase::EarlyBoot => write_bytes(out, b"boot monitor: paging active\r\n"),
                 KernelConsolePhase::KernelReady => write_bytes(out, b"kernel console: kernel ready\r\n"),
             },
             b"boot" | b"reboot" | b"panic" => {}
@@ -215,7 +215,7 @@ mod tests {
     fn echoes_line_and_help_response() {
         let mut console = KernelConsole::new(KernelConsolePhase::EarlyBoot);
         let (output, _) = send(&mut console, b"help\r");
-        assert_eq!(output, b"help\r\ncommands: help info boot reboot panic exec [--and-halt|--and-reboot] <path> [args]\r\nearly> ");
+        assert_eq!(output, b"help\r\ncommands: help info boot reboot panic exec [--and-halt|--and-reboot] <path> [args]\r\nbootmon> ");
     }
 
     #[test]
@@ -277,8 +277,8 @@ mod tests {
     fn info_reports_the_active_phase() {
         let mut early = KernelConsole::new(KernelConsolePhase::EarlyBoot);
         let (early_output, _) = send(&mut early, b"info\r");
-        assert!(early_output.windows(b"early console: paging active".len())
-            .any(|window| window == b"early console: paging active"));
+        assert!(early_output.windows(b"boot monitor: paging active".len())
+            .any(|window| window == b"boot monitor: paging active"));
 
         let mut ready = KernelConsole::new(KernelConsolePhase::KernelReady);
         let (ready_output, _) = send(&mut ready, b"info\r");

@@ -69,7 +69,7 @@ pub fn startup<A: crate::Arch>(
     // Hosted and play enter through this common startup spine. Run the same
     // backend-neutral early console before personality selection; its local
     // input comes from the existing interp IRQ queue (stdin or SDL).
-    if boot.console == Some(arch_abi::ConsoleBootStage::Early) {
+    if boot.bootmon() {
         match crate::kernel::console::polling::run(
                     machine,
                     lib::term::term(),
@@ -90,7 +90,7 @@ pub fn startup<A: crate::Arch>(
         }
         // This is a one-shot boot directive; otherwise a metal boot that
         // already stopped before ring 1 would enter the same console again.
-        boot.console = None;
+        boot.bootmon = false;
         // Publish the shared terminal grid before normal startup resumes.
         // This is a no-op for headless displays and the normal frame path for
         // interp/play surfaces.
@@ -344,24 +344,6 @@ pub fn startup<A: crate::Arch>(
     // DOS worlds are cloned from their substitute-BIOS template.
     let mut dos_template = crate::kernel::dos::DosTemplate::new(machine);
 
-    if boot.console == Some(arch_abi::ConsoleBootStage::Kernel) {
-        match crate::kernel::console::polling::run(
-            machine,
-            lib::term::term(),
-            boot,
-            &mut coordinator,
-            crate::kernel::console::kernel::KernelConsolePhase::KernelReady,
-            poll_input,
-            sync_cursor,
-        ) {
-            crate::kernel::console::polling::EarlyConsoleAction::Exec => {
-                boot.console = None;
-            }
-            crate::kernel::console::polling::EarlyConsoleAction::Boot => unreachable!(),
-            crate::kernel::console::polling::EarlyConsoleAction::Reboot => unreachable!(),
-            crate::kernel::console::polling::EarlyConsoleAction::Panic => unreachable!(),
-        }
-    }
 
     let mut next_context = KernelRunContext {
         screen,
@@ -392,7 +374,7 @@ pub fn startup<A: crate::Arch>(
                     sync_cursor,
                 ) {
                     crate::kernel::console::polling::EarlyConsoleAction::Exec => {
-                        boot.console = None;
+                        boot.bootmon = false;
                     }
                     crate::kernel::console::polling::EarlyConsoleAction::Boot => unreachable!(),
                     crate::kernel::console::polling::EarlyConsoleAction::Reboot => unreachable!(),

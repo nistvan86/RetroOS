@@ -258,7 +258,7 @@ pub unsafe extern "C" fn boot_kernel(magic: u32, info: *const arch::MultibootInf
     let mut machine = arch::Metal;
     let mut coordinator = crate::kernel::console::coordinator::ConsoleCoordinator::new();
 
-    if config.console == Some(arch_abi::ConsoleBootStage::Early) {
+    if config.bootmon() {
         match crate::kernel::console::polling::run(
                     &mut machine,
                     screen,
@@ -273,7 +273,7 @@ pub unsafe extern "C" fn boot_kernel(magic: u32, info: *const arch::MultibootInf
                 // The directive is a one-shot boot stop. Startup also has a
                 // common hosted/play entrypoint, so do not enter the monitor a
                 // second time after this metal pre-ring-1 handoff.
-                config.console = None;
+                config.bootmon = false;
                 crate::kernel::console::serial::detach_to_logging();
             }
             crate::kernel::console::polling::EarlyConsoleAction::Reboot => unreachable!(),

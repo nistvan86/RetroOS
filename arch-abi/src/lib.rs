@@ -97,13 +97,6 @@ pub enum PostExecAction {
     Reboot,
 }
 
-/// Select an optional kernel-console checkpoint. This is pure boot policy; the
-/// backend only transports the value to the common kernel startup path.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ConsoleBootStage {
-    Early,
-    Kernel,
-}
 
 /// Boot-time platform configuration, read once by the platform entry point and
 /// handed to `startup` — instead of the kernel poking firmware ports itself.
@@ -156,8 +149,8 @@ pub struct BootConfig {
     pub hostfs_port: Option<ComPort>,
     /// Optional kernel serial-console port. `None` leaves UART logging disabled.
     pub serial_console_port: Option<ComPort>,
-    /// Optional kernel-console checkpoint. None preserves normal startup.
-    pub console: Option<ConsoleBootStage>,
+    /// Stop after paging in the pre-runtime boot monitor.
+    pub bootmon: bool,
     /// Loader-supplied Multiboot module images. Hosted entries leave these empty.
     pub boot_modules: [Option<BootModule>; MAX_BOOT_MODULES],
     /// Metal's temporary physical-memory reader. Hosted entries leave this empty.
@@ -175,7 +168,7 @@ impl BootConfig {
             ram_overlay: false,
             hostfs_port: None,
             serial_console_port: None,
-            console: None,
+            bootmon: false,
             boot_modules: [None; MAX_BOOT_MODULES],
             boot_physical_reader: None,
         };
@@ -210,15 +203,13 @@ impl BootConfig {
     pub fn set_boot_directives_from_cmdline(&mut self, s: &[u8]) {
         self.set_serial_services_from_cmdline(s);
         cmdline::for_each_token(s, |token| {
-            let Some((key, value)) = cmdline::parse_key_value(token) else { return };
-            if !cmdline::key_eq(key, b"console") { return }
-            if cmdline::eq_ignore_ascii_case(value, b"early") {
-                self.console = Some(ConsoleBootStage::Early);
-            } else if cmdline::eq_ignore_ascii_case(value, b"kernel") {
-                self.console = Some(ConsoleBootStage::Kernel);
+            if cmdline::eq_ignore_ascii_case(token, b"bootmon") {
+                self.bootmon = true;
             }
         });
     }
+
+    pub fn bootmon(&self) -> bool { self.bootmon }
 
     /// Clear the pending launch command so normal interactive startup is used.
     pub fn clear_launch_cmdline(&mut self) {
@@ -266,38 +257,42 @@ impl BootConfig {
 
 #[cfg(test)]
 mod boot_config_tests {
-    use super::{BootConfig, ComPort, ConsoleBootStage};
+    use super::{BootConfig, ComPort};
 
     #[test]
-    fn console_mode_is_off_by_default() {
-        assert_eq!(BootConfig::empty().console, None);
+    fn boot_monitor_is_off_by_default() {
+        assert!(!BootConfig::empty().bootmon());
     }
 
     #[test]
-    fn console_directives_are_case_insensitive() {
+    fn boot_monitor_directive_is_case_insensitive() {
         let mut config = BootConfig::empty();
-        config.set_cmdline(b"CONSOLE=EARLY serial=com1");
-        assert_eq!(config.console, Some(ConsoleBootStage::Early));
+        config.set_cmdline(b"BOOTMON serial=com1");
+        assert!(config.bootmon());
         assert_eq!(config.serial_console_port, Some(ComPort::Com1));
-
-        config.set_cmdline(b"console=KERNEL");
-        assert_eq!(config.console, Some(ConsoleBootStage::Kernel));
     }
 
     #[test]
-    fn console_preserves_program_command_line() {
+    fn boot_monitor_requires_the_bare_token() {
         let mut config = BootConfig::empty();
-        config.set_cmdline(b"console=early;TESTS/X.COM arg");
-        assert_eq!(config.console, Some(ConsoleBootStage::Early));
-        assert_eq!(config.cmdline(), Some(&b"console=early;TESTS/X.COM arg"[..]));
+        config.set_cmdline(b"bootmonitor bootmon=true");
+        assert!(!config.bootmon());
     }
 
     #[test]
-    fn unknown_console_mode_is_ignored() {
+    fn boot_monitor_preserves_program_command_line() {
         let mut config = BootConfig::empty();
-        config.set_cmdline(b"console=unknown TESTS/X.COM");
-        assert_eq!(config.console, None);
-        assert_eq!(config.cmdline(), Some(&b"console=unknown TESTS/X.COM"[..]));
+        config.set_cmdline(b"bootmon;TESTS/X.COM arg");
+        assert!(config.bootmon());
+        assert_eq!(config.cmdline(), Some(&b"bootmon;TESTS/X.COM arg"[..]));
+    }
+
+    #[test]
+    fn console_directives_are_ignored() {
+        let mut config = BootConfig::empty();
+        config.set_cmdline(b"console=early console=kernel TESTS/X.COM");
+        assert!(!config.bootmon());
+        assert_eq!(config.cmdline(), Some(&b"console=early console=kernel TESTS/X.COM"[..]));
     }
 
     #[test]
