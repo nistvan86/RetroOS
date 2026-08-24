@@ -86,6 +86,14 @@ impl BootModule {
 pub type BootPhysicalReader = fn(u64, &mut [u8]) -> bool;
 
 
+/// Action to take after a one-shot early-console executable exits.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PostExecAction {
+    Shutdown,
+    ContinueToDn,
+    Reboot,
+}
+
 /// Boot-time platform configuration, read once by the platform entry point and
 /// handed to `startup` — instead of the kernel poking firmware ports itself.
 ///
@@ -98,6 +106,7 @@ pub type BootPhysicalReader = fn(u64, &mut [u8]) -> bool;
 pub struct BootConfig {
     cmdline: [u8; 4096],
     cmdline_len: Option<usize>, // None = no headless cmdline (interactive DN loop)
+    post_exec: PostExecAction,
     cwd: [u8; 256],
     cwd_len: Option<usize>,
     /// VFS subtree that DOS drive `C:` maps to (normalized: no leading `/`, one
@@ -148,6 +157,7 @@ impl BootConfig {
     pub const fn empty() -> Self {
         let mut cfg = BootConfig {
             cmdline: [0; 4096], cmdline_len: None,
+            post_exec: PostExecAction::Shutdown,
             cwd: [0; 256], cwd_len: None,
             c_root: [0; 128], c_root_len: 0,
             debug_watch: None, is_qemu: false, audio_mixed: false,
@@ -198,7 +208,14 @@ impl BootConfig {
     /// Clear the pending launch command so normal interactive startup is used.
     pub fn clear_launch_cmdline(&mut self) {
         self.cmdline_len = None;
+        self.post_exec = PostExecAction::Shutdown;
     }
+
+    pub fn set_post_exec(&mut self, action: PostExecAction) {
+        self.post_exec = action;
+    }
+
+    pub fn post_exec(&self) -> PostExecAction { self.post_exec }
 
     /// Record the headless command line (semicolon-separated program list).
     pub fn set_cmdline(&mut self, s: &[u8]) {

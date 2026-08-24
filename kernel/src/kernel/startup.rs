@@ -697,9 +697,21 @@ fn run<A: crate::Arch>(
                 sink.as_mut(),
             );
         }
-        crate::screenln!(screen, "All commands done — shutting down.");
-        crate::kernel::drivers::hda::emergency_quiesce(); // codec must not ride into poweroff unparked
-        machine.shutdown();
+        match boot.post_exec() {
+            arch_abi::PostExecAction::Shutdown => {
+                crate::screenln!(screen, "All commands done — shutting down.");
+                crate::kernel::drivers::hda::emergency_quiesce();
+                machine.shutdown();
+            }
+            arch_abi::PostExecAction::Reboot => {
+                crate::screenln!(screen, "All commands done — rebooting.");
+                crate::kernel::drivers::hda::emergency_quiesce();
+                machine.reboot();
+            }
+            arch_abi::PostExecAction::ContinueToDn => {
+                crate::screenln!(screen, "All commands done — starting DN.");
+            }
+        }
     }
 
     // COMMAND.COM is prebuilt (in-OS TCC at image-build time —

@@ -84,8 +84,9 @@ def main() -> int:
                 read_until(connection, marker[:-1], output)
                 if b"Starting /host/STUB.COM" not in output:
                     raise AssertionError(f"HostFS executable was not selected: {bytes(output)!r}")
-                if b"Starting DN" in output:
-                    raise AssertionError(f"DN was selected instead: {bytes(output)!r}")
+                read_until(connection, b"Starting DN...", output)
+                if "All commands done — shutting down.".encode() in output:
+                    raise AssertionError(f"default exec halted unexpectedly: {bytes(output)!r}")
         finally:
             qemu.terminate()
             hostfs.terminate()

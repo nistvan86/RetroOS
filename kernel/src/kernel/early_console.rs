@@ -20,6 +20,7 @@ pub struct EarlyConsole {
     exec: [u8; 256],
     exec_len: usize,
     pending_action: Option<EarlyConsoleAction>,
+    post_exec: arch_abi::PostExecAction,
 }
 
 impl EarlyConsole {
@@ -31,6 +32,7 @@ impl EarlyConsole {
             exec: [0; 256],
             exec_len: 0,
             pending_action: None,
+            post_exec: arch_abi::PostExecAction::Shutdown,
         }
     }
 
@@ -82,11 +84,24 @@ impl EarlyConsole {
         if command == b"reboot" {
             return Some(EarlyConsoleAction::Reboot);
         }
-        if command.len() > 5 && &command[..5] == b"exec " {
-            let path = &command[5..];
+        if command.starts_with(b"exec ") {
+            let mut path = &command[5..];
+            let mut post_exec = arch_abi::PostExecAction::ContinueToDn;
+            for (option, action) in [
+                (b"--and-dn " as &[u8], arch_abi::PostExecAction::ContinueToDn),
+                (b"--and-halt " as &[u8], arch_abi::PostExecAction::Shutdown),
+                (b"--and-reboot " as &[u8], arch_abi::PostExecAction::Reboot),
+            ] {
+                if path.starts_with(option) {
+                    path = &path[option.len()..];
+                    post_exec = action;
+                    break;
+                }
+            }
             if !path.is_empty() && path.len() <= self.exec.len() {
                 self.exec[..path.len()].copy_from_slice(path);
                 self.exec_len = path.len();
+                self.post_exec = post_exec;
                 return Some(EarlyConsoleAction::Exec);
             }
         }
@@ -99,7 +114,7 @@ impl EarlyConsole {
             return;
         }
         match &self.line[..self.len] {
-            b"help" => write_bytes(out, b"commands: help info resume reboot exec <path> [args]\r\n"),
+            b"help" => write_bytes(out, b"commands: help info resume reboot exec [--and-dn|--and-halt|--and-reboot] <path> [args]\r\n"),
             b"info" => write_bytes(out, b"early console: paging active\r\n"),
             b"resume" | b"reboot" => {}
             command if command.starts_with(b"exec ") => {
@@ -112,6 +127,8 @@ impl EarlyConsole {
     pub fn exec_command(&self) -> Option<&[u8]> {
         (self.exec_len != 0).then_some(&self.exec[..self.exec_len])
     }
+
+    pub fn post_exec(&self) -> arch_abi::PostExecAction { self.post_exec }
 
     pub fn take_action(&mut self) -> Option<EarlyConsoleAction> {
         self.pending_action.take()
@@ -218,6 +235,7 @@ pub fn run<A: crate::Arch>(
                         EarlyConsoleAction::Exec => {
                             if let Some(command) = session.endpoint_mut().exec_command() {
                                 boot.set_cmdline(command);
+                                boot.set_post_exec(session.endpoint_mut().post_exec());
                                 action
                             } else {
                                 session.write_bytes(b"exec command was lost\r\n");
@@ -244,6 +262,7 @@ pub fn run<A: crate::Arch>(
                         EarlyConsoleAction::Exec => {
                             if let Some(command) = session.endpoint_mut().exec_command() {
                                 boot.set_cmdline(command);
+                                boot.set_post_exec(session.endpoint_mut().post_exec());
                                 action
                             } else {
                                 session.write_bytes(b"exec command was lost\r\n");
@@ -264,6 +283,7 @@ mod tests {
     use alloc::vec::Vec;
     use super::{EarlyConsole, EarlyConsoleAction};
     use crate::kernel::console_session::EchoSink;
+    use arch_abi::PostExecAction;
 
     #[derive(Default)]
     struct Output(Vec<u8>);
@@ -287,7 +307,7 @@ mod tests {
     fn echoes_line_and_help_response() {
         let mut console = EarlyConsole::new();
         let (output, _) = send(&mut console, b"help\r");
-        assert_eq!(output, b"help\r\ncommands: help info resume reboot exec <path> [args]\r\nearly> ");
+        assert_eq!(output, b"help\r\ncommands: help info resume reboot exec <path> [args] [--then dn|reboot]\r\nearly> ");
     }
 
     #[test]
@@ -303,6 +323,30 @@ mod tests {
         let (_, action) = send(&mut console, b"exec TESTS/X.COM arg\r");
         assert_eq!(action, Some(EarlyConsoleAction::Exec));
         assert_eq!(console.exec_command(), Some(&b"TESTS/X.COM arg"[..]));
+    }
+
+    #[test]
+    fn exec_post_action_suffix_is_removed_from_launch() {
+        let mut console = EarlyConsole::new();
+        let (_, action) = send(&mut console, b"exec /host/STUB.COM arg\r");
+        assert_eq!(action, Some(EarlyConsoleAction::Exec));
+        assert_eq!(console.exec_command(), Some(&b"/host/STUB.COM arg"[..]));
+        assert_eq!(console.post_exec(), PostExecAction::ContinueToDn);
+
+        let (_, action) = send(&mut console, b"exec --and-dn /host/STUB.COM\r");
+        assert_eq!(action, Some(EarlyConsoleAction::Exec));
+        assert_eq!(console.exec_command(), Some(&b"/host/STUB.COM"[..]));
+        assert_eq!(console.post_exec(), PostExecAction::ContinueToDn);
+
+        let (_, action) = send(&mut console, b"exec --and-halt /host/STUB.COM\r");
+        assert_eq!(action, Some(EarlyConsoleAction::Exec));
+        assert_eq!(console.exec_command(), Some(&b"/host/STUB.COM"[..]));
+        assert_eq!(console.post_exec(), PostExecAction::Shutdown);
+
+        let (_, action) = send(&mut console, b"exec --and-reboot /host/STUB.COM\r");
+        assert_eq!(action, Some(EarlyConsoleAction::Exec));
+        assert_eq!(console.exec_command(), Some(&b"/host/STUB.COM"[..]));
+        assert_eq!(console.post_exec(), PostExecAction::Reboot);
     }
 
     #[test]
