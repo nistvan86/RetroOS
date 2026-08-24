@@ -51,7 +51,7 @@ def assemble_probe(name: str, output: str) -> None:
     subprocess.run(["nasm", "-f", "bin", "-o", output, str(source)], check=True)
 
 
-def run_dos_echo_probe(root: str, directory: str) -> None:
+def run_dos_echo_probe(root: str, directory: str, console_mode: str = "console=early") -> None:
     console_socket = os.path.join(directory, "echo-console.sock")
     hostfs_socket = os.path.join(directory, "echo-hostfs.sock")
     listening = b"DOS-ECHO-LISTENING"
@@ -70,7 +70,7 @@ def run_dos_echo_probe(root: str, directory: str) -> None:
             "-serial", f"unix:{console_socket},server=on,wait=on",
             "-chardev", f"socket,id=hostfs,path={hostfs_socket},server=on,wait=on",
             "-device", "isa-serial,chardev=hostfs,index=1",
-            "-fw_cfg", "name=opt/cmdline,string=serial=com1 hostfs=com2 console=early",
+            "-fw_cfg", f"name=opt/cmdline,string=serial=com1 hostfs=com2 {console_mode}",
         ],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
@@ -78,7 +78,7 @@ def run_dos_echo_probe(root: str, directory: str) -> None:
     try:
         with connect_console(console_socket) as connection:
             output = bytearray()
-            read_until(connection, b"early> ", output)
+            read_until(connection, b"kernel> " if console_mode == "console=kernel" else b"early> ", output)
             connection.sendall(b"exec --and-halt /host/ECHO.COM\r")
             read_until(connection, b"Starting /host/ECHO.COM", output)
             read_until(connection, listening, output)
@@ -223,6 +223,7 @@ def main() -> int:
                     process.wait(timeout=5)
 
         run_dos_echo_probe(root, directory)
+        run_dos_echo_probe(root, directory, "console=kernel")
         run_personality_probe(
             root,
             directory,

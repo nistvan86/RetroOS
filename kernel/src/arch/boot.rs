@@ -256,12 +256,15 @@ pub unsafe extern "C" fn boot_kernel(magic: u32, info: *const arch::MultibootInf
     // Keep the backend handle alive through the pre-ring-1 early console as
     // well as normal startup, so all backends use the same input contract.
     let mut machine = arch::Metal;
+    let mut coordinator = crate::kernel::console::coordinator::ConsoleCoordinator::new();
 
     if config.console == Some(arch_abi::ConsoleBootStage::Early) {
         match crate::kernel::early_console::run(
                     &mut machine,
                     screen,
                     &mut config,
+                    &mut coordinator,
+                    crate::kernel::console::kernel::KernelConsolePhase::EarlyBoot,
                     arch::early_console_input,
                     arch::early_console_cursor,
                 ) {
@@ -333,6 +336,7 @@ pub unsafe extern "C" fn boot_kernel(magic: u32, info: *const arch::MultibootInf
     crate::kernel::startup::startup(
             &mut machine,
             &mut config,
+            coordinator,
             arch::early_console_input,
             arch::early_console_cursor,
         );

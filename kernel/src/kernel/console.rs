@@ -15,6 +15,7 @@
 //! - Linux owners get keys cooked into their fds; they have no virtual
 //!   device bus for other IRQs.
 
+pub mod coordinator;
 pub mod dos;
 pub mod kernel;
 pub mod polling;

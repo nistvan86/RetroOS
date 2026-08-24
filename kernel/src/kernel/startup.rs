@@ -4,6 +4,7 @@ extern crate alloc;
 
 use crate::Regs;
 use crate::kernel::thread;
+use crate::kernel::console::coordinator::ConsoleCoordinator;
 use crate::kernel::{
     fs::portable_ext4::PortableExt4Fs,
     vfs,
@@ -15,6 +16,7 @@ use crate::kernel::{
 pub fn startup<A: crate::Arch>(
     machine: &mut A,
     boot: &mut crate::BootConfig,
+    mut coordinator: ConsoleCoordinator,
     poll_input: fn() -> Option<crate::Irq>,
     sync_cursor: fn(usize, usize),
 ) -> ! {
@@ -72,6 +74,8 @@ pub fn startup<A: crate::Arch>(
                     machine,
                     lib::term::term(),
                     boot,
+                    &mut coordinator,
+                    crate::kernel::console::kernel::KernelConsolePhase::EarlyBoot,
                     poll_input,
                     sync_cursor,
                 ) {
@@ -340,9 +344,29 @@ pub fn startup<A: crate::Arch>(
     // DOS worlds are cloned from their substitute-BIOS template.
     let mut dos_template = crate::kernel::dos::DosTemplate::new(machine);
 
+    if boot.console == Some(arch_abi::ConsoleBootStage::Kernel) {
+        match crate::kernel::early_console::run(
+            machine,
+            lib::term::term(),
+            boot,
+            &mut coordinator,
+            crate::kernel::console::kernel::KernelConsolePhase::KernelReady,
+            poll_input,
+            sync_cursor,
+        ) {
+            crate::kernel::early_console::EarlyConsoleAction::Exec => {
+                boot.console = None;
+            }
+            crate::kernel::early_console::EarlyConsoleAction::Boot => unreachable!(),
+            crate::kernel::early_console::EarlyConsoleAction::Reboot => unreachable!(),
+            crate::kernel::early_console::EarlyConsoleAction::Panic => unreachable!(),
+        }
+    }
+
     run(
         machine,
         boot,
+        &mut coordinator,
         &master_env,
         &mut bios_workspace,
         &mut dos_template,
@@ -634,6 +658,7 @@ mod launch_directive_tests {
 fn run<A: crate::Arch>(
     machine: &mut A,
     boot: &crate::BootConfig,
+    coordinator: &mut ConsoleCoordinator,
     master_env: &[u8],
     bios_workspace: &mut crate::kernel::bios_display::BiosDisplayWorkspace<A>,
     dos_template: &mut crate::kernel::dos::DosTemplate<A>,
@@ -657,6 +682,7 @@ fn run<A: crate::Arch>(
         // own directory.
         let explicit_cwd = boot.cwd().map(trim_ascii);
 
+        let mut launched_any = false;
         for segment in arch_abi::cmdline::segments(raw) {
             let Some(launch) = arch_abi::cmdline::launch(segment, is_kernel_launch_directive)
             else {
@@ -678,6 +704,7 @@ fn run<A: crate::Arch>(
                     &path[..cwd_end]
                 }
             };
+            launched_any = true;
             crate::screenln!(
                 screen,
                 "Starting {} {} (cwd={})...",
@@ -690,6 +717,7 @@ fn run<A: crate::Arch>(
                 bios_workspace,
                 dos_template,
                 threads,
+                coordinator,
                 path,
                 tail,
                 cwd,
@@ -700,7 +728,8 @@ fn run<A: crate::Arch>(
                 sink.as_mut(),
             );
         }
-        match boot.post_exec() {
+        if launched_any {
+            match boot.post_exec() {
             arch_abi::PostExecAction::Shutdown => {
                 crate::screenln!(screen, "All commands done — shutting down.");
                 crate::kernel::drivers::hda::emergency_quiesce();
@@ -714,6 +743,7 @@ fn run<A: crate::Arch>(
             arch_abi::PostExecAction::ContinueToDn => {
                 crate::screenln!(screen, "All commands done — starting DN.");
             }
+        }
         }
     }
 
@@ -733,6 +763,7 @@ fn run<A: crate::Arch>(
             bios_workspace,
             dos_template,
             threads,
+            coordinator,
             &dn_path,
             b"",
             b"",
@@ -752,6 +783,7 @@ fn run_program_with_screen<A: crate::Arch>(
     bios_workspace: &mut crate::kernel::bios_display::BiosDisplayWorkspace<A>,
     dos_template: &mut crate::kernel::dos::DosTemplate<A>,
     threads: &mut [thread::Thread<A>],
+    coordinator: &mut ConsoleCoordinator,
     path: &[u8],
     cmdline_tail: &[u8],
     cwd: &[u8],
@@ -770,6 +802,7 @@ fn run_program_with_screen<A: crate::Arch>(
         bios_workspace,
         dos_template,
         threads,
+        coordinator,
         path,
         cmdline_tail,
         cwd,
@@ -795,6 +828,7 @@ fn run_program<A: crate::Arch>(
     bios_workspace: &mut crate::kernel::bios_display::BiosDisplayWorkspace<A>,
     dos_template: &mut crate::kernel::dos::DosTemplate<A>,
     threads: &mut [thread::Thread<A>],
+    coordinator: &mut ConsoleCoordinator,
     path: &[u8],
     cmdline_tail: &[u8],
     cwd: &[u8],
@@ -896,8 +930,8 @@ fn run_program<A: crate::Arch>(
             crate::dbg_println!("[WATCH] armed write watchpoint at {:08X}", addr0);
         }
     }
-    crate::kernel::serial_console::attach_personality();
-    event_loop(machine, bios_workspace, threads, tid, sb, sink, display)
+    coordinator.attach_personality();
+    event_loop(machine, bios_workspace, threads, tid, sb, sink, coordinator, display)
 }
 
 /// Launch an ELF as a fresh Linux process thread and return its tid: stdin is
@@ -1008,6 +1042,7 @@ pub fn event_loop<A: crate::Arch>(
     first_tid: usize,
     sb_card: Option<crate::kernel::drivers::sb16::SbCard>,
     mut sink: Option<&mut crate::kernel::sound::Sink>,
+    coordinator: &mut ConsoleCoordinator,
     mut display: Option<crate::kernel::display::Display>,
 ) -> (
     crate::kernel::display::Display,
@@ -1254,6 +1289,7 @@ pub fn event_loop<A: crate::Arch>(
                 // The loop's contract: no thread resources survive it —
                 // callers never inherit zombies.
                 thread::reap_all_zombies(threads, machine);
+                coordinator.detach();
                 // Every owner is gone, so both capabilities are back in this
                 // frame — hand them to whoever runs the next program.
                 return (

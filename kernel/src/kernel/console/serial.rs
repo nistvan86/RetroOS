@@ -11,9 +11,8 @@ use crate::kernel::drivers::uart16550::Uart16550;
 
 const DISABLED: u8 = 0;
 const POLLING_LOG: u8 = 1;
-const EARLY_SESSION: u8 = 2;
-const PERSONALITY_SESSION: u8 = 3;
-const FAILED: u8 = 4;
+const ATTACHED_SESSION: u8 = 2;
+const FAILED: u8 = 3;
 
 static STATE: AtomicU8 = AtomicU8::new(DISABLED);
 static PORT: AtomicU8 = AtomicU8::new(0);
@@ -24,8 +23,7 @@ static mut DECODER: ConsoleProtocolDecoder = ConsoleProtocolDecoder::new();
 pub enum SerialConsoleState {
     Disabled,
     PollingLog,
-    EarlySession,
-    PersonalitySession,
+    AttachedSession,
     Failed,
 }
 
@@ -49,7 +47,7 @@ pub fn tx_route(state: SerialConsoleState, source: SerialTxSource) -> SerialTxRo
     match source {
         SerialTxSource::Emergency => SerialTxRoute::Emergency,
         SerialTxSource::AmbientLog if matches!(state, SerialConsoleState::Disabled | SerialConsoleState::PollingLog) => SerialTxRoute::Ambient,
-        SerialTxSource::AttachedSession if matches!(state, SerialConsoleState::EarlySession | SerialConsoleState::PersonalitySession) => SerialTxRoute::Session,
+        SerialTxSource::AttachedSession if matches!(state, SerialConsoleState::AttachedSession) => SerialTxRoute::Session,
         _ => SerialTxRoute::Drop,
     }
 }
@@ -81,39 +79,31 @@ pub fn init_log(port: ComPort) -> bool {
     true
 }
 
-/// Attach the configured serial input to the early console.
-pub fn attach_early() -> bool {
+/// Attach any interactive console endpoint to the configured serial port.
+///
+/// A target must first detach to `PollingLog`; direct replacement is rejected.
+pub fn attach_session() -> bool {
     if PORT.load(Ordering::Acquire) == 0 {
         return false;
     }
     STATE.compare_exchange(
         POLLING_LOG,
-        EARLY_SESSION,
+        ATTACHED_SESSION,
         Ordering::AcqRel,
         Ordering::Acquire,
     ).is_ok()
 }
 
-/// Attach the configured serial input/output to a personality session.
-///
-/// A session must first detach to `PollingLog`; direct session-to-session
-/// replacement is intentionally rejected.
-pub fn attach_personality() -> bool {
-    if PORT.load(Ordering::Acquire) == 0 {
-        return false;
-    }
-    STATE.compare_exchange(
-        POLLING_LOG,
-        PERSONALITY_SESSION,
-        Ordering::AcqRel,
-        Ordering::Acquire,
-    ).is_ok()
-}
+/// Temporary compatibility wrapper for callers not yet migrated.
+pub fn attach_early() -> bool { attach_session() }
+
+/// Temporary compatibility wrapper for callers not yet migrated.
+pub fn attach_personality() -> bool { attach_session() }
 
 /// Return to ambient kernel logging while no interactive session owns serial.
 pub fn detach_to_logging() {
     let state = STATE.load(Ordering::Acquire);
-    if state == EARLY_SESSION || state == PERSONALITY_SESSION {
+    if state == ATTACHED_SESSION {
         STATE.store(POLLING_LOG, Ordering::Release);
     }
 }
@@ -131,7 +121,7 @@ pub fn session_tx_allowed() -> bool {
 /// Ordinary terminal input is enabled only for an attached endpoint. Protocol
 /// control frames remain available independently in `PollingLog`.
 pub fn ordinary_rx_allowed() -> bool {
-    matches!(state(), SerialConsoleState::EarlySession | SerialConsoleState::PersonalitySession)
+    matches!(state(), SerialConsoleState::AttachedSession)
 }
 
 /// Poll one decoded console event from the configured serial console.
@@ -159,7 +149,7 @@ pub fn try_read_event() -> Option<ConsoleProtocolEvent> {
 
 /// Compatibility helper for the early-console byte path.
 pub fn try_read_byte() -> Option<u8> {
-    if STATE.load(Ordering::Acquire) != EARLY_SESSION {
+    if STATE.load(Ordering::Acquire) != ATTACHED_SESSION {
         return None;
     }
     let port = decode(PORT.load(Ordering::Acquire))?;
@@ -169,8 +159,7 @@ pub fn try_read_byte() -> Option<u8> {
 pub fn state() -> SerialConsoleState {
     match STATE.load(Ordering::Acquire) {
         POLLING_LOG => SerialConsoleState::PollingLog,
-        EARLY_SESSION => SerialConsoleState::EarlySession,
-        PERSONALITY_SESSION => SerialConsoleState::PersonalitySession,
+        ATTACHED_SESSION => SerialConsoleState::AttachedSession,
         FAILED => SerialConsoleState::Failed,
         _ => SerialConsoleState::Disabled,
     }
@@ -179,7 +168,7 @@ pub fn state() -> SerialConsoleState {
 #[cfg(test)]
 mod tests {
     use super::{
-        attach_early, attach_personality, detach_to_logging, SerialConsoleState, STATE, DISABLED,
+        attach_session, detach_to_logging, SerialConsoleState, STATE, DISABLED,
         POLLING_LOG,
     };
     use core::sync::atomic::Ordering;
@@ -193,15 +182,13 @@ mod tests {
     #[test]
     fn tx_route_exhaustively_matches_shared_ownership() {
         use super::{SerialConsoleState as S, SerialTxRoute as R, SerialTxSource as T};
-        for state in [S::Disabled, S::PollingLog, S::EarlySession, S::PersonalitySession, S::Failed] {
+        for state in [S::Disabled, S::PollingLog, S::AttachedSession, S::Failed] {
             assert_eq!(super::tx_route(state, T::Emergency), R::Emergency);
         }
         assert_eq!(super::tx_route(S::PollingLog, T::AmbientLog), R::Ambient);
-        assert_eq!(super::tx_route(S::EarlySession, T::AmbientLog), R::Drop);
-        assert_eq!(super::tx_route(S::PersonalitySession, T::AmbientLog), R::Drop);
+        assert_eq!(super::tx_route(S::AttachedSession, T::AmbientLog), R::Drop);
         assert_eq!(super::tx_route(S::PollingLog, T::AttachedSession), R::Drop);
-        assert_eq!(super::tx_route(S::EarlySession, T::AttachedSession), R::Session);
-        assert_eq!(super::tx_route(S::PersonalitySession, T::AttachedSession), R::Session);
+        assert_eq!(super::tx_route(S::AttachedSession, T::AttachedSession), R::Session);
     }
 
     #[test]
@@ -211,7 +198,7 @@ mod tests {
         assert!(super::ambient_tx_allowed());
         assert!(!super::session_tx_allowed());
         assert!(!super::ordinary_rx_allowed());
-        assert!(attach_early());
+        assert!(attach_session());
         assert!(!super::ambient_tx_allowed());
         assert!(super::session_tx_allowed());
         assert!(super::ordinary_rx_allowed());
@@ -225,13 +212,13 @@ mod tests {
     fn session_handoffs_return_to_logging_before_replacement() {
         super::PORT.store(1, Ordering::Release);
         STATE.store(POLLING_LOG, Ordering::Release);
-        assert!(attach_early());
-        assert_eq!(super::state(), SerialConsoleState::EarlySession);
-        assert!(!attach_personality());
+        assert!(attach_session());
+        assert_eq!(super::state(), SerialConsoleState::AttachedSession);
+        assert!(!attach_session());
         detach_to_logging();
         assert_eq!(super::state(), SerialConsoleState::PollingLog);
-        assert!(attach_personality());
-        assert_eq!(super::state(), SerialConsoleState::PersonalitySession);
+        assert!(attach_session());
+        assert_eq!(super::state(), SerialConsoleState::AttachedSession);
         detach_to_logging();
         assert_eq!(super::state(), SerialConsoleState::PollingLog);
     }

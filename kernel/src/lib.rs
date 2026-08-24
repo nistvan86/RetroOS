@@ -122,7 +122,8 @@ pub fn host_run_elf<A: Arch>(
         t.personality.adopt_display(
             machine, &mut bios_workspace, kernel::display::Display::headless())
     };
-    kernel::startup::event_loop(machine, &mut bios_workspace, &mut threads, tid, None, None, display);
+    let mut coordinator = kernel::console::coordinator::ConsoleCoordinator::new();
+    kernel::startup::event_loop(machine, &mut bios_workspace, &mut threads, tid, None, None, &mut coordinator, display);
     dbg_println!("[host] guest exited");
     kernel::drivers::hda::emergency_quiesce(); // codec must not ride into poweroff unparked
     machine.shutdown();

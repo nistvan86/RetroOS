@@ -148,9 +148,11 @@ fn main() {
             config.set_c_root(c.as_bytes());
         }
         let mut machine = arch::Interp;
+        let coordinator = kernel::kernel::console::coordinator::ConsoleCoordinator::new();
         kernel::startup(
                     &mut machine,
                     &mut config,
+                    coordinator,
                     arch::early_console_input,
                     arch::early_console_cursor,
                 );
