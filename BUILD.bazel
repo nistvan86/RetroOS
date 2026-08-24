@@ -69,7 +69,7 @@ _BUSYBOX_APPLETS = [
     "ps", "kill", "sleep", "time", "id", "tty", "uname",
     "cmp", "diff", "tar", "gzip", "gunzip", "dd",
     "vi", "ed", "more", "less",
-    "sh", "ash", "env", "which", "test", "[",
+    "sh", "ash", "env", "which", "test", "[", "reboot",
 ]
 
 [pkg_mklink(
