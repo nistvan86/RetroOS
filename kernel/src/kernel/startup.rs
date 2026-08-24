@@ -1053,6 +1053,16 @@ pub fn event_loop<A: crate::Arch>(
                     serial_keys.push(crate::Irq::Key(scancode));
                 }
                 crate::kernel::console_protocol::ConsoleProtocolEvent::Input(
+                    crate::kernel::console_session::InputEvent::Byte(byte),
+                ) if crate::kernel::serial_console::ordinary_rx_allowed()
+                    && matches!(&threads[ctx.tid].personality, thread::Personality::Dos(_)) => {
+                    let mut scancodes = [0; 4];
+                    let count = crate::kernel::console_dos::ascii_to_scancodes(byte, &mut scancodes);
+                    for &scancode in &scancodes[..count] {
+                        serial_keys.push(crate::Irq::Key(scancode));
+                    }
+                }
+                crate::kernel::console_protocol::ConsoleProtocolEvent::Input(
                     crate::kernel::console_session::InputEvent::Scancode(_),
                 )
                 | crate::kernel::console_protocol::ConsoleProtocolEvent::Input(

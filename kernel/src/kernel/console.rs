@@ -92,7 +92,8 @@ fn dispatch_dos<A: crate::Arch>(
                     }
                 }
             } else {
-                unsafe { (*dp).process_key(machine, regs, sc) };
+                let mut adapter = crate::kernel::console_dos::DosConsoleAdapter::new(unsafe { &mut *dp });
+                adapter.deliver_scancode(machine, regs, sc);
             }
         } else {
             if !blocked {

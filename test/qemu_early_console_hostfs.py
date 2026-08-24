@@ -26,14 +26,6 @@ def read_until(sock: socket.socket, marker: bytes, data: bytearray) -> None:
         raise AssertionError(f"did not receive {marker!r}; got {bytes(data)!r}")
 
 
-def protocol_frame(payload: bytes) -> bytes:
-    escaped = payload.replace(b"\x10", b"\x10\x10")
-    return b"\x10\x02" + escaped + b"\x10\x03"
-
-
-def key_event(action: int, scancode: int) -> bytes:
-    return protocol_frame(bytes((0x02, action, scancode)))
-
 
 def connect_console(path: str) -> socket.socket:
     connection = None
@@ -90,8 +82,7 @@ def run_dos_echo_probe(root: str, directory: str) -> None:
             read_until(connection, b"Starting /host/ECHO.COM", output)
             read_until(connection, listening, output)
             before_key = len(output)
-            connection.sendall(key_event(0, 0x10))  # q make
-            connection.sendall(key_event(1, 0x10))  # q break
+            connection.sendall(b"q")  # raw serial ASCII, translated by DOS adapter
             read_until(connection, marker, output)
             after_key = bytes(output[before_key:])
             if b"q" not in after_key:
