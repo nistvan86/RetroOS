@@ -1027,6 +1027,7 @@ pub fn event_loop<A: crate::Arch>(
                 )
             ) {
                 crate::println!("serial control: reboot requested");
+                crate::kernel::drivers::hda::emergency_quiesce();
                 machine.reboot();
             }
         }

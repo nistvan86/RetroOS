@@ -194,6 +194,7 @@ pub fn run<A: crate::Arch>(
             let input = match event {
                 ConsoleProtocolEvent::Control(ConsoleControl::Reboot) => {
                     crate::println!("serial control: reboot requested");
+                    crate::kernel::drivers::hda::emergency_quiesce();
                     machine.reboot()
                 }
                 ConsoleProtocolEvent::Input(InputEvent::Byte(byte)) => Some(InputEvent::Byte(byte)),
