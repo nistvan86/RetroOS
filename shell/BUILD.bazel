@@ -22,15 +22,9 @@ rust_binary(
     ],
 )
 
-musl_binary(
-    name = "shell_elf",
-    binary = ":shell_bin",
-    visibility = ["//visibility:public"],
-)
-
 rust_binary(
-    name = "init_bin",
-    srcs = ["src/init.rs"],
+    name = "reboot_bin",
+    srcs = ["src/reboot.rs"],
     edition = "2024",
     rustc_flags = [
         "-Copt-level=s",
@@ -44,7 +38,13 @@ rust_binary(
 )
 
 musl_binary(
-    name = "init_elf",
-    binary = ":init_bin",
+    name = "reboot_elf",
+    binary = ":reboot_bin",
+    visibility = ["//visibility:public"],
+)
+
+musl_binary(
+    name = "shell_elf",
+    binary = ":shell_bin",
     visibility = ["//visibility:public"],
 )

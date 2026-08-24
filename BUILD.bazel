@@ -69,7 +69,7 @@ _BUSYBOX_APPLETS = [
     "ps", "kill", "sleep", "time", "id", "tty", "uname",
     "cmp", "diff", "tar", "gzip", "gunzip", "dd",
     "vi", "ed", "more", "less",
-    "sh", "ash", "env", "which", "test", "[", "reboot",
+    "sh", "ash", "env", "which", "test", "[",
 ]
 
 [pkg_mklink(
@@ -264,7 +264,7 @@ pkg_tar(
     name = "bin_tar",
     files = {
         "//:apps/busybox/busybox": "bin/busybox",
-        "//shell:init_elf": "sbin/init",
+        "//shell:reboot_elf": "bin/reboot",
     },
     srcs = [":lnk_bin_" + a for a in _BUSYBOX_APPLETS],
 )
