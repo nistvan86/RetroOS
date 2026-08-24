@@ -312,6 +312,26 @@ fn stop_controller_dma() {
         let sd = SD_BASE + i * SD_STRIDE;
         w8(sd + SDCTL, r8(sd + SDCTL) & !0x02);
     }
+
+    // RUN is controller-synchronous on real HDA hardware. Do not assert the
+    // controller reset while a stream still reports RUN: the SEJT can leave
+    // the codec wedged and fail to reset. This is deliberately bounded because
+    // the helper is also used by panic and emergency reboot paths.
+    for _ in 0..100_000 {
+        let mut running = false;
+        for i in 0..stream_count {
+            let sd = SD_BASE + i * SD_STRIDE;
+            if r8(sd + SDCTL) & 0x02 != 0 {
+                running = true;
+                break;
+            }
+        }
+        if !running {
+            break;
+        }
+        core::hint::spin_loop();
+    }
+
     w8(CORBCTL, 0);
     w8(RIRBCTL, 0);
     w32(DPLBASE, 0);
