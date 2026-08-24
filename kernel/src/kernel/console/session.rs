@@ -4,37 +4,10 @@
 //! out to attached sinks. It deliberately owns no input queue, line discipline,
 //! terminal grid, or hardware device.
 
-pub type AttachmentId = u8;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ConsoleEndpointId {
-    Early,
-    TtyLike(u8),
-    Dos(usize),
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum InputPolicy {
-    Exclusive(AttachmentId),
-    Shared,
-    LocalPriority,
-    SerialPriority,
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum OutputOrigin {
-    AmbientLog,
-    Terminal,
-    DosConsole,
-    EarlyConsole,
-}
-
-pub trait InputAdapter {
-    fn deliver(&mut self, input: InputEvent) -> InputDisposition;
-}
-
-pub trait OutputObserver {
-    fn output(&mut self, origin: OutputOrigin, byte: u8);
+    StreamConsole,
+    EndpointRendered,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -155,13 +128,7 @@ where
         self.endpoint
     }
 
-    pub fn settings(&self) -> ConsoleSettings {
-        self.settings
-    }
 
-    pub fn set_echo(&mut self, echo: bool) {
-        self.settings.echo = echo;
-    }
 }
 
 #[cfg(test)]

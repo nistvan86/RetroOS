@@ -10,7 +10,7 @@
 //! one Set-1 scancode byte. Extended prefixes are sent as their own key event,
 //! preserving the existing InputEvent::Scancode representation.
 
-use super::console_session::InputEvent;
+use super::session::InputEvent;
 
 const DLE: u8 = 0x10;
 const STX: u8 = 0x02;
@@ -151,7 +151,7 @@ impl Default for ConsoleProtocolDecoder {
 #[cfg(test)]
 mod tests {
     use super::{ConsoleControl, ConsoleProtocolDecoder, ConsoleProtocolEvent, DLE, ETX, FRAME_TIMEOUT_EPOCHS, KEY_EVENT, PANIC, REBOOT, STX};
-    use crate::kernel::console_session::InputEvent;
+    use crate::kernel::console::session::InputEvent;
 
     fn frame(payload: &[u8]) -> alloc::vec::Vec<u8> {
         let mut bytes = alloc::vec![DLE, STX];
