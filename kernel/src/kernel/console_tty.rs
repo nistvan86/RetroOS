@@ -47,6 +47,7 @@ impl TtyConsoleAdapter {
 pub fn write_console_bytes(bytes: &[u8]) {
     for &byte in bytes {
         term::putchar(byte);
+        crate::kernel::serial_log::write_session_byte(byte);
     }
     term::mark_dirty();
 }

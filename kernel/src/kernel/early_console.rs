@@ -176,7 +176,7 @@ struct SerialOutput;
 
 impl OutputAttachment for SerialOutput {
     fn write_byte(&mut self, byte: u8) {
-        crate::kernel::serial_log::write_byte(byte);
+        crate::kernel::serial_log::write_session_byte(byte);
     }
 }
 

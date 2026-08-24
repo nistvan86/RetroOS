@@ -1247,6 +1247,7 @@ fn dos_putchar<A: crate::Arch>(machine: &mut A, dos: &mut thread::DosState<A>, c
     // Render through DOS's own teletype — the same one INT 10h AH=0Eh uses,
     // on the BDA cursor that DOS programs read directly.
     super::bios::teletype(machine, dos, c, 0x07);
+    crate::kernel::serial_log::write_session_byte(c);
 }
 
 fn psp_struct_seg<A: crate::Arch>(dos: &thread::DosState<A>) -> u16 {

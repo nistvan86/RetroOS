@@ -893,6 +893,7 @@ fn run_program<A: crate::Arch>(
             crate::dbg_println!("[WATCH] armed write watchpoint at {:08X}", addr0);
         }
     }
+    crate::kernel::serial_console::attach_personality();
     event_loop(machine, bios_workspace, threads, tid, sb, sink, display)
 }
 

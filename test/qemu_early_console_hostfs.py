@@ -82,6 +82,8 @@ def main() -> int:
                 read_until(connection, b"early> ", output)
                 connection.sendall(b"exec /host/STUB.COM\r")
                 read_until(connection, marker[:-1], output)
+                if output.count(marker[:-1]) != 1:
+                    raise AssertionError(f"HostFS marker was duplicated: {bytes(output)!r}")
                 if b"Starting /host/STUB.COM" not in output:
                     raise AssertionError(f"HostFS executable was not selected: {bytes(output)!r}")
                 read_until(connection, b"Starting DN...", output)

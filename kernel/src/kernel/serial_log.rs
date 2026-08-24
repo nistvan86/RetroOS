@@ -62,9 +62,7 @@ fn present_byte(byte: u8, previous_was_cr: &mut bool, mut send: impl FnMut(u8) -
     true
 }
 
-/// Mirror one ambient log byte to the UART. A no-op until `init` succeeds.
-/// On the first timeout, disable the sink so later logging remains bounded.
-pub fn write_byte(byte: u8) {
+fn write_uart_byte(byte: u8) {
     if STATE.load(Ordering::Relaxed) != LIVE {
         return;
     }
@@ -80,6 +78,20 @@ pub fn write_byte(byte: u8) {
     PREVIOUS_WAS_CR.store(previous_was_cr, Ordering::Relaxed);
     if !sent {
         STATE.store(FAILED, Ordering::Relaxed);
+    }
+}
+
+/// Mirror one ambient log byte to the UART while no session owns TX.
+pub fn write_byte(byte: u8) {
+    if crate::kernel::serial_console::ambient_tx_allowed() {
+        write_uart_byte(byte);
+    }
+}
+
+/// Write one byte from an attached session through the sole session TX route.
+pub fn write_session_byte(byte: u8) {
+    if crate::kernel::serial_console::session_tx_allowed() {
+        write_uart_byte(byte);
     }
 }
 

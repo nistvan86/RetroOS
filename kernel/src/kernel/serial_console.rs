@@ -94,6 +94,16 @@ pub fn detach_to_logging() {
     }
 }
 
+/// Ambient logs own serial TX only while no interactive session is attached.
+pub fn ambient_tx_allowed() -> bool {
+    matches!(state(), SerialConsoleState::Disabled | SerialConsoleState::PollingLog)
+}
+
+/// An attached session owns serial TX only while it also owns serial RX.
+pub fn session_tx_allowed() -> bool {
+    matches!(state(), SerialConsoleState::EarlySession | SerialConsoleState::PersonalitySession)
+}
+
 /// Poll one decoded console event from the configured serial console.
 ///
 /// Protocol controls are recognized in every live state, including
@@ -148,6 +158,21 @@ mod tests {
     fn starts_disabled() {
         STATE.store(DISABLED, Ordering::Release);
         assert_eq!(super::state(), SerialConsoleState::Disabled);
+    }
+
+    #[test]
+    #[test]
+    fn tx_valve_follows_the_shared_attachment_state() {
+        super::PORT.store(1, Ordering::Release);
+        STATE.store(POLLING_LOG, Ordering::Release);
+        assert!(super::ambient_tx_allowed());
+        assert!(!super::session_tx_allowed());
+        assert!(attach_early());
+        assert!(!super::ambient_tx_allowed());
+        assert!(super::session_tx_allowed());
+        detach_to_logging();
+        assert!(super::ambient_tx_allowed());
+        assert!(!super::session_tx_allowed());
     }
 
     #[test]
