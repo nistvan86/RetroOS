@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import shutil
 import socket
 import subprocess
 import sys
@@ -100,6 +101,52 @@ def run_dos_echo_probe(root: str, directory: str) -> None:
                 process.wait(timeout=5)
 
 
+def run_personality_probe(
+    root: str,
+    directory: str,
+    source: str,
+    guest_name: str,
+    marker: bytes,
+) -> None:
+    console_socket = os.path.join(directory, f"{guest_name}.console.sock")
+    hostfs_socket = os.path.join(directory, f"{guest_name}.hostfs.sock")
+    shutil.copyfile(source, os.path.join(root, guest_name))
+    hostfs = subprocess.Popen(
+        ["python3", "hostfs.py", root, hostfs_socket],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    qemu = subprocess.Popen(
+        [
+            "qemu-system-i386", "-cpu", "486",
+            "-drive", "file=bazel-bin/image.bin,format=raw,snapshot=on",
+            "-m", "64M", "-display", "none", "-no-reboot",
+            "-serial", f"unix:{console_socket},server=on,wait=on",
+            "-chardev", f"socket,id={guest_name}hostfs,path={hostfs_socket},server=on,wait=on",
+            "-device", f"isa-serial,chardev={guest_name}hostfs,index=1",
+            "-fw_cfg", "name=opt/cmdline,string=serial=com1 hostfs=com2 earlyconsole",
+        ],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        with connect_console(console_socket) as connection:
+            output = bytearray()
+            read_until(connection, b"early> ", output)
+            connection.sendall(f"exec --and-halt /host/{guest_name}\r".encode())
+            read_until(connection, b"Starting /host/" + guest_name.encode(), output)
+            read_until(connection, marker, output)
+    finally:
+        qemu.terminate()
+        hostfs.terminate()
+        for process in (qemu, hostfs):
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=5)
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory(prefix="retroos-qemu-early-hostfs-") as directory:
         root = os.path.join(directory, "root")
@@ -170,8 +217,22 @@ def main() -> int:
                     process.wait(timeout=5)
 
         run_dos_echo_probe(root, directory)
+        run_personality_probe(
+            root,
+            directory,
+            "bazel-out/k8-opt/bin/test/os2/hello/hello_lx.exe",
+            "OS2HELLO.EXE",
+            b"Hello from Open Watcom C",
+        )
+        run_personality_probe(
+            root,
+            directory,
+            "bazel-out/k8-opt/bin/test/windows/hello/hello.exe",
+            "WINHELLO.EXE",
+            b"Hello from Open Watcom Win32",
+        )
 
-    print("PASS: QEMU early-console HostFS exec and DOS echo")
+    print("PASS: QEMU early-console HostFS exec, DOS, OS/2, and Win32 echo")
     return 0
 
 
