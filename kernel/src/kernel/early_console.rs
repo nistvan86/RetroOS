@@ -307,7 +307,7 @@ mod tests {
     fn echoes_line_and_help_response() {
         let mut console = EarlyConsole::new();
         let (output, _) = send(&mut console, b"help\r");
-        assert_eq!(output, b"help\r\ncommands: help info resume reboot exec <path> [args] [--then dn|reboot]\r\nearly> ");
+        assert_eq!(output, b"help\r\ncommands: help info resume reboot exec [--and-dn|--and-halt|--and-reboot] <path> [args]\r\nearly> ");
     }
 
     #[test]

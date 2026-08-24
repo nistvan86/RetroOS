@@ -30,6 +30,31 @@ pub enum SerialConsoleState {
     Failed,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SerialTxSource {
+    AmbientLog,
+    AttachedSession,
+    Emergency,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SerialTxRoute {
+    Drop,
+    Ambient,
+    Session,
+    Emergency,
+}
+
+/// Pure ownership valve used by both TX paths and unit tests.
+pub fn tx_route(state: SerialConsoleState, source: SerialTxSource) -> SerialTxRoute {
+    match source {
+        SerialTxSource::Emergency => SerialTxRoute::Emergency,
+        SerialTxSource::AmbientLog if matches!(state, SerialConsoleState::Disabled | SerialConsoleState::PollingLog) => SerialTxRoute::Ambient,
+        SerialTxSource::AttachedSession if matches!(state, SerialConsoleState::EarlySession | SerialConsoleState::PersonalitySession) => SerialTxRoute::Session,
+        _ => SerialTxRoute::Drop,
+    }
+}
+
 fn encode(port: ComPort) -> u8 {
     match port {
         ComPort::Com1 => 1,
@@ -96,11 +121,17 @@ pub fn detach_to_logging() {
 
 /// Ambient logs own serial TX only while no interactive session is attached.
 pub fn ambient_tx_allowed() -> bool {
-    matches!(state(), SerialConsoleState::Disabled | SerialConsoleState::PollingLog)
+    tx_route(state(), SerialTxSource::AmbientLog) == SerialTxRoute::Ambient
 }
 
 /// An attached session owns serial TX only while it also owns serial RX.
 pub fn session_tx_allowed() -> bool {
+    tx_route(state(), SerialTxSource::AttachedSession) == SerialTxRoute::Session
+}
+
+/// Ordinary terminal input is enabled only for an attached endpoint. Protocol
+/// control frames remain available independently in `PollingLog`.
+pub fn ordinary_rx_allowed() -> bool {
     matches!(state(), SerialConsoleState::EarlySession | SerialConsoleState::PersonalitySession)
 }
 
@@ -161,18 +192,34 @@ mod tests {
     }
 
     #[test]
+    fn tx_route_exhaustively_matches_shared_ownership() {
+        use super::{SerialConsoleState as S, SerialTxRoute as R, SerialTxSource as T};
+        for state in [S::Disabled, S::PollingLog, S::EarlySession, S::PersonalitySession, S::Failed] {
+            assert_eq!(super::tx_route(state, T::Emergency), R::Emergency);
+        }
+        assert_eq!(super::tx_route(S::PollingLog, T::AmbientLog), R::Ambient);
+        assert_eq!(super::tx_route(S::EarlySession, T::AmbientLog), R::Drop);
+        assert_eq!(super::tx_route(S::PersonalitySession, T::AmbientLog), R::Drop);
+        assert_eq!(super::tx_route(S::PollingLog, T::AttachedSession), R::Drop);
+        assert_eq!(super::tx_route(S::EarlySession, T::AttachedSession), R::Session);
+        assert_eq!(super::tx_route(S::PersonalitySession, T::AttachedSession), R::Session);
+    }
+
     #[test]
     fn tx_valve_follows_the_shared_attachment_state() {
         super::PORT.store(1, Ordering::Release);
         STATE.store(POLLING_LOG, Ordering::Release);
         assert!(super::ambient_tx_allowed());
         assert!(!super::session_tx_allowed());
+        assert!(!super::ordinary_rx_allowed());
         assert!(attach_early());
         assert!(!super::ambient_tx_allowed());
         assert!(super::session_tx_allowed());
+        assert!(super::ordinary_rx_allowed());
         detach_to_logging();
         assert!(super::ambient_tx_allowed());
         assert!(!super::session_tx_allowed());
+        assert!(!super::ordinary_rx_allowed());
     }
 
     #[test]

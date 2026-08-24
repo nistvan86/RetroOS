@@ -147,7 +147,7 @@ impl Default for ConsoleProtocolDecoder {
 
 #[cfg(test)]
 mod tests {
-    use super::{ConsoleControl, ConsoleProtocolDecoder, ConsoleProtocolEvent, DLE, ETX, KEY_EVENT, REBOOT, STX};
+    use super::{ConsoleControl, ConsoleProtocolDecoder, ConsoleProtocolEvent, DLE, ETX, FRAME_TIMEOUT_EPOCHS, KEY_EVENT, REBOOT, STX};
     use crate::kernel::console_session::InputEvent;
 
     fn frame(payload: &[u8]) -> alloc::vec::Vec<u8> {

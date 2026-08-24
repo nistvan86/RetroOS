@@ -1044,8 +1044,13 @@ pub fn event_loop<A: crate::Arch>(
                 }
                 crate::kernel::console_protocol::ConsoleProtocolEvent::Input(
                     crate::kernel::console_session::InputEvent::Scancode(scancode),
-                ) => serial_keys.push(crate::Irq::Key(scancode)),
+                ) if crate::kernel::serial_console::ordinary_rx_allowed() => {
+                    serial_keys.push(crate::Irq::Key(scancode));
+                }
                 crate::kernel::console_protocol::ConsoleProtocolEvent::Input(
+                    crate::kernel::console_session::InputEvent::Scancode(_),
+                )
+                | crate::kernel::console_protocol::ConsoleProtocolEvent::Input(
                     crate::kernel::console_session::InputEvent::Byte(_),
                 ) => {}
             }
