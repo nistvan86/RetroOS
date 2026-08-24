@@ -94,6 +94,14 @@ pub enum PostExecAction {
     Reboot,
 }
 
+/// Select an optional kernel-console checkpoint. This is pure boot policy; the
+/// backend only transports the value to the common kernel startup path.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ConsoleBootStage {
+    Early,
+    Kernel,
+}
+
 /// Boot-time platform configuration, read once by the platform entry point and
 /// handed to `startup` — instead of the kernel poking firmware ports itself.
 ///
@@ -145,8 +153,8 @@ pub struct BootConfig {
     pub hostfs_port: Option<ComPort>,
     /// Optional kernel serial-console port. `None` leaves UART logging disabled.
     pub serial_console_port: Option<ComPort>,
-    /// Stop after minimum console initialization and enter the kernel early console.
-    pub early_console: bool,
+    /// Optional kernel-console checkpoint. None preserves normal startup.
+    pub console: Option<ConsoleBootStage>,
     /// Loader-supplied Multiboot module images. Hosted entries leave these empty.
     pub boot_modules: [Option<BootModule>; MAX_BOOT_MODULES],
     /// Metal's temporary physical-memory reader. Hosted entries leave this empty.
@@ -164,7 +172,7 @@ impl BootConfig {
             ram_overlay: false,
             hostfs_port: None,
             serial_console_port: None,
-            early_console: false,
+            console: None,
             boot_modules: [None; MAX_BOOT_MODULES],
             boot_physical_reader: None,
         };
@@ -199,8 +207,12 @@ impl BootConfig {
     pub fn set_boot_directives_from_cmdline(&mut self, s: &[u8]) {
         self.set_serial_services_from_cmdline(s);
         cmdline::for_each_token(s, |token| {
-            if cmdline::key_eq(token, b"earlyconsole") {
-                self.early_console = true;
+            let Some((key, value)) = cmdline::parse_key_value(token) else { return };
+            if !cmdline::key_eq(key, b"console") { return }
+            if cmdline::eq_ignore_ascii_case(value, b"early") {
+                self.console = Some(ConsoleBootStage::Early);
+            } else if cmdline::eq_ignore_ascii_case(value, b"kernel") {
+                self.console = Some(ConsoleBootStage::Kernel);
             }
         });
     }
@@ -251,33 +263,44 @@ impl BootConfig {
 
 #[cfg(test)]
 mod boot_config_tests {
-    use super::{BootConfig, ComPort};
+    use super::{BootConfig, ComPort, ConsoleBootStage};
 
     #[test]
-    fn early_console_is_off_by_default() {
-        assert!(!BootConfig::empty().early_console);
+    fn console_mode_is_off_by_default() {
+        assert_eq!(BootConfig::empty().console, None);
     }
 
     #[test]
-    fn early_console_directive_is_case_insensitive() {
+    fn console_directives_are_case_insensitive() {
         let mut config = BootConfig::empty();
-        config.set_cmdline(b"EARLYCONSOLE serial=com1");
-        assert!(config.early_console);
+        config.set_cmdline(b"CONSOLE=EARLY serial=com1");
+        assert_eq!(config.console, Some(ConsoleBootStage::Early));
         assert_eq!(config.serial_console_port, Some(ComPort::Com1));
+
+        config.set_cmdline(b"console=KERNEL");
+        assert_eq!(config.console, Some(ConsoleBootStage::Kernel));
     }
 
     #[test]
-    fn early_console_preserves_program_command_line() {
+    fn console_preserves_program_command_line() {
         let mut config = BootConfig::empty();
-        config.set_cmdline(b"earlyconsole;TESTS/X.COM arg");
-        assert!(config.early_console);
-        assert_eq!(config.cmdline(), Some(&b"earlyconsole;TESTS/X.COM arg"[..]));
+        config.set_cmdline(b"console=early;TESTS/X.COM arg");
+        assert_eq!(config.console, Some(ConsoleBootStage::Early));
+        assert_eq!(config.cmdline(), Some(&b"console=early;TESTS/X.COM arg"[..]));
+    }
+
+    #[test]
+    fn unknown_console_mode_is_ignored() {
+        let mut config = BootConfig::empty();
+        config.set_cmdline(b"console=unknown TESTS/X.COM");
+        assert_eq!(config.console, None);
+        assert_eq!(config.cmdline(), Some(&b"console=unknown TESTS/X.COM"[..]));
     }
 
     #[test]
     fn launch_override_preserves_serial_service_assignments() {
         let mut config = BootConfig::empty();
-        config.set_cmdline(b"hostfs=com1 serial=com2 earlyconsole");
+        config.set_cmdline(b"hostfs=com1 serial=com2 console=early");
         config.set_cmdline(b"TESTS/X.COM arg");
         assert_eq!(config.hostfs_port, Some(ComPort::Com1));
         assert_eq!(config.serial_console_port, Some(ComPort::Com2));
@@ -287,7 +310,7 @@ mod boot_config_tests {
     #[test]
     fn clearing_launch_cmdline_preserves_serial_service_assignments() {
         let mut config = BootConfig::empty();
-        config.set_cmdline(b"hostfs=com1 serial=com2 earlyconsole");
+        config.set_cmdline(b"hostfs=com1 serial=com2 console=early");
         config.clear_launch_cmdline();
         assert_eq!(config.cmdline(), None);
         assert_eq!(config.hostfs_port, Some(ComPort::Com1));

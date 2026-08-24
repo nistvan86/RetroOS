@@ -67,7 +67,7 @@ pub fn startup<A: crate::Arch>(
     // Hosted and play enter through this common startup spine. Run the same
     // backend-neutral early console before personality selection; its local
     // input comes from the existing interp IRQ queue (stdin or SDL).
-    if boot.early_console {
+    if boot.console == Some(arch_abi::ConsoleBootStage::Early) {
         match crate::kernel::early_console::run(
                     machine,
                     lib::term::term(),
@@ -75,15 +75,18 @@ pub fn startup<A: crate::Arch>(
                     poll_input,
                     sync_cursor,
                 ) {
-            crate::kernel::early_console::EarlyConsoleAction::Continue
+            crate::kernel::early_console::EarlyConsoleAction::Boot
             | crate::kernel::early_console::EarlyConsoleAction::Exec => {
                 crate::kernel::serial_console::detach_to_logging();
             }
             crate::kernel::early_console::EarlyConsoleAction::Reboot => unreachable!(),
+                        crate::kernel::early_console::EarlyConsoleAction::Panic => {
+                            panic!("early console panic requested");
+                        }
         }
         // This is a one-shot boot directive; otherwise a metal boot that
         // already stopped before ring 1 would enter the same console again.
-        boot.early_console = false;
+        boot.console = None;
         // Publish the shared terminal grid before normal startup resumes.
         // This is a no-op for headless displays and the normal frame path for
         // interp/play surfaces.

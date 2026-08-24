@@ -28,7 +28,7 @@ timeout --kill-after=5s 20s qemu-system-i386 \
     -m 64M -display none -no-reboot \
     -serial "file:$serial_log" \
     -debugcon "file:$debug_log" \
-    -fw_cfg "name=opt/cmdline,string=serial=com1 earlyconsole" \
+    -fw_cfg "name=opt/cmdline,string=serial=com1 console=early" \
     >/dev/null 2>&1
 status=$?
 set -e

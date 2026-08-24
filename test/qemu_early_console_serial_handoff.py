@@ -17,13 +17,13 @@ def handoff() -> int:
     with QemuSerialTest() as qemu:
         qemu.read_until(b"early> ")
         qemu.send(b"help\r")
-        qemu.read_until(b"commands: help info resume reboot")
+        qemu.read_until(b"commands: help info boot reboot")
         qemu.send(b"info\r")
         qemu.read_until(b"early console: paging active")
-        qemu.send(b"resume\r")
+        qemu.send(b"boot\r")
         qemu.read_until(b"Welcome to RetroOS!")
         qemu.read_until(b"Starting DN...")
-        qemu.require(b"help\r\n", b"info\r\n", b"resume\r\n", b"early> resume")
+        qemu.require(b"help\r\n", b"info\r\n", b"boot\r\n", b"early> boot")
     print("PASS: QEMU early-console serial handoff")
     return 0
 
@@ -48,7 +48,7 @@ def key_sequence_early() -> int:
         qemu.read_until(b"early> ")
         qemu.send(ctrl_alt_delete_sequence())
         qemu.send(b"help\r")
-        qemu.read_until(b"commands: help info resume reboot")
+        qemu.read_until(b"commands: help info boot reboot")
     print("PASS: QEMU serial Ctrl-Alt-Delete make/break sequence")
     return 0
 
@@ -66,7 +66,7 @@ def panic_early() -> int:
 def panic_dos() -> int:
     with QemuSerialTest() as qemu:
         qemu.read_until(b"early> ")
-        qemu.send(b"resume\r")
+        qemu.send(b"boot\r")
         qemu.read_until(b"Starting DN...")
         qemu.send(frame(b"\x04"))  # PANIC control command
         qemu.read_until(b"!!! KERNEL PANIC !!!")
@@ -88,12 +88,12 @@ def reboot_early() -> int:
 def reboot_dn() -> int:
     with QemuSerialTest(no_reboot=False) as qemu:
         qemu.read_until(b"early> ")
-        qemu.send(b"resume\r")
+        qemu.send(b"boot\r")
         qemu.read_until(b"Starting DN...")
         qemu.send(ctrl_alt_delete_sequence())
         qemu.send(frame(b"\x01"))  # REBOOT control command
         qemu.read_until_count(b"RetroOS Rust Kernel", 2)
-        # The fw_cfg command line still requests earlyconsole after reset, so
+        # The fw_cfg command line still requests console=early after reset, so
         # the restarted guest stops at the new early prompt again.
         qemu.read_until_count(b"RetroOS early console", 2)
     print("PASS: QEMU serial reboot with DOS personality")

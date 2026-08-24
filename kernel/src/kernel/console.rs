@@ -16,6 +16,7 @@
 //!   device bus for other IRQs.
 
 pub mod dos;
+pub mod kernel;
 pub mod polling;
 pub mod protocol;
 pub mod serial;

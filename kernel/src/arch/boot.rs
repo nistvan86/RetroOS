@@ -257,7 +257,7 @@ pub unsafe extern "C" fn boot_kernel(magic: u32, info: *const arch::MultibootInf
     // well as normal startup, so all backends use the same input contract.
     let mut machine = arch::Metal;
 
-    if config.early_console {
+    if config.console == Some(arch_abi::ConsoleBootStage::Early) {
         match crate::kernel::early_console::run(
                     &mut machine,
                     screen,
@@ -265,15 +265,18 @@ pub unsafe extern "C" fn boot_kernel(magic: u32, info: *const arch::MultibootInf
                     arch::early_console_input,
                     arch::early_console_cursor,
                 ) {
-            crate::kernel::early_console::EarlyConsoleAction::Continue
+            crate::kernel::early_console::EarlyConsoleAction::Boot
             | crate::kernel::early_console::EarlyConsoleAction::Exec => {
                 // The directive is a one-shot boot stop. Startup also has a
                 // common hosted/play entrypoint, so do not enter the monitor a
                 // second time after this metal pre-ring-1 handoff.
-                config.early_console = false;
+                config.console = None;
                 crate::kernel::serial_console::detach_to_logging();
             }
             crate::kernel::early_console::EarlyConsoleAction::Reboot => unreachable!(),
+                        crate::kernel::early_console::EarlyConsoleAction::Panic => {
+                            panic!("early console panic requested");
+                        }
         }
     }
 

@@ -173,9 +173,9 @@ mod tests {
 
     #[test]
     fn visits_all_tokens_including_bare_directives() {
-        let expected = [b"TESTS/X.COM".as_slice(), b"earlyconsole", b"serial=com1"];
+        let expected = [b"TESTS/X.COM".as_slice(), b"console=early", b"serial=com1"];
         let mut count = 0;
-        for_each_token(b"TESTS/X.COM; earlyconsole serial=com1", |token| {
+        for_each_token(b"TESTS/X.COM; console=early serial=com1", |token| {
             assert_eq!(token, expected[count]);
             count += 1;
         });

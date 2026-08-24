@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise serial input, echo, and resume from the early console."""
+"""Exercise serial input, echo, and boot from the early console."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ def main() -> int:
         qemu.read_until(b"early> ")
 
         qemu.send(b"help\r")
-        qemu.read_until(b"commands: help info resume reboot")
+        qemu.read_until(b"commands: help info boot reboot")
         qemu.require(b"help\r\n")
 
         if exec_mode:
@@ -24,7 +24,7 @@ def main() -> int:
             if b"Starting DN" in qemu.output:
                 raise AssertionError(f"default DN path was selected: {bytes(qemu.output)!r}")
         else:
-            qemu.send(b"resume\r")
+            qemu.send(b"boot\r")
             qemu.read_until(b"Block devices initialized")
             qemu.require(b"Ring1 entered")
     print("PASS: QEMU early-console exec" if exec_mode else "PASS: QEMU early-console input")
