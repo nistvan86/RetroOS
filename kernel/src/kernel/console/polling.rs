@@ -67,6 +67,7 @@ pub fn run<A: crate::Arch>(
             Some(CoordinatorEvent::Control(ConsoleControl::Reboot)) => {
                 crate::println!("serial control: reboot requested");
                 crate::kernel::drivers::hda::emergency_quiesce();
+                crate::kernel::console::serial_log::flush();
                 machine.reboot()
             }
             Some(CoordinatorEvent::Control(ConsoleControl::Panic)) => {
@@ -141,7 +142,11 @@ pub fn run<A: crate::Arch>(
                     EarlyConsoleAction::Exec
                 }
                 KernelConsoleAction::Exec => continue,
-                KernelConsoleAction::Reboot => machine.reboot(),
+                KernelConsoleAction::Reboot => {
+                    crate::kernel::drivers::hda::emergency_quiesce();
+                    crate::kernel::console::serial_log::flush();
+                    machine.reboot()
+                },
                 KernelConsoleAction::Panic => panic!("kernel console panic requested"),
             };
             coordinator.detach();
