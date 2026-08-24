@@ -1,7 +1,7 @@
-//! Polling driver for the kernel console during EarlyBoot and KernelReady.
+//! Polling driver for the pre-runtime boot monitor.
 
 use super::coordinator::{ConsoleControl, ConsoleCoordinator, CoordinatorEvent, KernelConsoleInputContext};
-use super::kernel::{KernelConsoleAction, KernelConsolePhase};
+use super::kernel::KernelConsoleAction;
 use super::session::{ConsoleSession, ConsoleSettings, InputEvent, OutputAttachment};
 
 // Temporary source compatibility while callers migrate from the old module.
@@ -32,7 +32,7 @@ impl OutputAttachment for SerialOutput {
     }
 }
 
-/// Run the polling kernel-console driver for one boot phase.
+/// Run the polling boot-monitor driver.
 ///
 /// Input is sourced from the backend's existing local-input path and from the
 /// optional serial console. Both are immediately delivered to the coordinator's
@@ -42,11 +42,10 @@ pub fn run<A: crate::Arch>(
     screen: &mut lib::term::Term,
     boot: &mut crate::BootConfig,
     coordinator: &mut ConsoleCoordinator,
-    phase: KernelConsolePhase,
     poll_input: fn() -> Option<crate::Irq>,
     sync_cursor: fn(usize, usize),
 ) -> EarlyConsoleAction {
-    coordinator.attach_kernel(phase);
+    coordinator.attach_kernel();
     let serial_attached = coordinator.serial_attached();
     let mut video = VideoOutput { screen, sync_cursor };
     let mut serial = SerialOutput;
@@ -58,15 +57,9 @@ pub fn run<A: crate::Arch>(
             serial_attached.then_some(&mut serial),
             ConsoleSettings::default(),
         );
-        session.write_bytes(match phase {
-            KernelConsolePhase::EarlyBoot => b"RetroOS boot monitor\r\n",
-            KernelConsolePhase::KernelReady => b"RetroOS kernel console\r\n",
-        });
+        session.write_bytes(b"RetroOS boot monitor\r\n");
         session.write_bytes(b"type help for commands\r\n");
-        session.write_bytes(match phase {
-            KernelConsolePhase::EarlyBoot => b"bootmon> ",
-            KernelConsolePhase::KernelReady => b"kernel> ",
-        });
+        session.write_bytes(b"bootmon> ");
     }
 
     loop {

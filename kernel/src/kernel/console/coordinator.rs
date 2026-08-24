@@ -1,6 +1,6 @@
 //! Phase-independent ownership and routing for the single active console.
 
-use super::kernel::{KernelConsole, KernelConsoleAction, KernelConsolePhase};
+use super::kernel::{KernelConsole, KernelConsoleAction};
 use super::protocol::{ConsoleControl as ProtocolControl, ConsoleProtocolEvent};
 use super::serial;
 use super::session::{ConsoleSession, ConsoleSettings, InputEvent, InputDisposition, OutputAttachment, OutputOrigin};
@@ -8,7 +8,7 @@ use super::session::{ConsoleSession, ConsoleSettings, InputEvent, InputDispositi
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ConsoleTarget {
     Detached,
-    Kernel(KernelConsolePhase),
+    Kernel,
     Personality,
 }
 
@@ -54,17 +54,17 @@ impl ConsoleCoordinator {
         Self {
             target: ConsoleTarget::Detached,
             serial_attached: false,
-            kernel_console: KernelConsole::new(KernelConsolePhase::EarlyBoot),
+            kernel_console: KernelConsole::new(),
         }
     }
 
     pub fn target(&self) -> ConsoleTarget { self.target }
 
-    pub fn attach_kernel(&mut self, phase: KernelConsolePhase) -> bool {
+    pub fn attach_kernel(&mut self) -> bool {
         self.detach();
-        self.kernel_console = KernelConsole::new(phase);
+        self.kernel_console = KernelConsole::new();
         self.serial_attached = serial::attach_session();
-        self.target = ConsoleTarget::Kernel(phase);
+        self.target = ConsoleTarget::Kernel;
         true
     }
 
@@ -86,7 +86,7 @@ impl ConsoleCoordinator {
     pub fn serial_attached(&self) -> bool { self.serial_attached }
 
     pub fn kernel_console_mut(&mut self) -> Option<&mut KernelConsole> {
-        matches!(self.target, ConsoleTarget::Kernel(_)).then_some(&mut self.kernel_console)
+        matches!(self.target, ConsoleTarget::Kernel).then_some(&mut self.kernel_console)
     }
 
     /// Poll one serial event. Controls remain available in `PollingLog`, while
@@ -108,7 +108,7 @@ impl ConsoleCoordinator {
             exec_len: 0,
             post_exec: None,
         };
-        if !matches!(self.target, ConsoleTarget::Kernel(_)) {
+        if !matches!(self.target, ConsoleTarget::Kernel) {
             return result;
         }
         let Some(endpoint) = self.kernel_console_mut() else {
@@ -257,7 +257,7 @@ mod tests {
         map_protocol_event, ConsoleControl, ConsoleCoordinator, ConsoleTarget, CoordinatorEvent,
         KernelConsoleAction, KernelConsoleInputContext,
     };
-    use crate::kernel::console::kernel::KernelConsolePhase;
+
     use crate::kernel::console::protocol::{ConsoleControl as ProtocolControl, ConsoleProtocolEvent};
     use crate::kernel::console::session::{
         InputDisposition, InputEvent, OutputAttachment, OutputOrigin,
@@ -304,10 +304,9 @@ mod tests {
     }
 
     #[test]
-    fn kernel_delivery_fans_out_echo_in_both_phases() {
-        for phase in [KernelConsolePhase::EarlyBoot, KernelConsolePhase::KernelReady] {
+    fn kernel_delivery_fans_out_echo() {
             let mut coordinator = ConsoleCoordinator::new();
-            coordinator.attach_kernel(phase);
+            coordinator.attach_kernel();
             let mut video = Sink::default();
             let mut serial = Sink::default();
             let mut last = None;
@@ -324,13 +323,12 @@ mod tests {
             assert_eq!(video.0, serial.0);
             assert!(video.0.windows(b"commands: help".len())
                 .any(|window| window == b"commands: help"));
-        }
     }
 
     #[test]
-    fn kernel_delivery_preserves_phase_gated_boot() {
+    fn kernel_delivery_accepts_boot() {
         let mut early = ConsoleCoordinator::new();
-        early.attach_kernel(KernelConsolePhase::EarlyBoot);
+        early.attach_kernel();
         let mut video = Sink::default();
         let mut last = None;
         for &byte in b"boot\r" {
@@ -341,27 +339,14 @@ mod tests {
         }
         assert_eq!(last.unwrap().action, Some(KernelConsoleAction::Boot));
 
-        let mut ready = ConsoleCoordinator::new();
-        ready.attach_kernel(KernelConsolePhase::KernelReady);
-        let mut video = Sink::default();
-        let mut last = None;
-        for &byte in b"boot\r" {
-            last = Some(ready.deliver_kernel(
-                KernelConsoleInputContext { video: &mut video, serial: None::<&mut Sink> },
-                InputEvent::Byte(byte),
-            ));
-        }
-        assert_eq!(last.unwrap().action, None);
-        assert!(video.0.windows(b"only available".len())
-            .any(|window| window == b"only available"));
     }
 
     #[test]
     fn target_transitions_are_endpoint_agnostic() {
         let mut coordinator = ConsoleCoordinator::new();
         assert_eq!(coordinator.target(), ConsoleTarget::Detached);
-        coordinator.attach_kernel(KernelConsolePhase::EarlyBoot);
-        assert_eq!(coordinator.target(), ConsoleTarget::Kernel(KernelConsolePhase::EarlyBoot));
+        coordinator.attach_kernel();
+        assert_eq!(coordinator.target(), ConsoleTarget::Kernel);
         coordinator.detach();
         assert_eq!(coordinator.target(), ConsoleTarget::Detached);
         coordinator.attach_personality();

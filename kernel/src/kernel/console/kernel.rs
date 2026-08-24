@@ -2,11 +2,6 @@
 
 use super::session::{ConsoleEndpoint, EchoSink, InputDisposition, InputEvent};
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum KernelConsolePhase {
-    EarlyBoot,
-    KernelReady,
-}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum KernelConsoleAction {
@@ -17,7 +12,7 @@ pub enum KernelConsoleAction {
 }
 
 pub struct KernelConsole {
-    phase: KernelConsolePhase,
+
     line: [u8; 256],
     len: usize,
     overflowed: bool,
@@ -28,9 +23,8 @@ pub struct KernelConsole {
 }
 
 impl KernelConsole {
-    pub const fn new(phase: KernelConsolePhase) -> Self {
+    pub const fn new() -> Self {
         Self {
-            phase,
             line: [0; 256],
             len: 0,
             overflowed: false,
@@ -41,14 +35,9 @@ impl KernelConsole {
         }
     }
 
-    pub fn phase(&self) -> KernelConsolePhase { self.phase }
 
     pub fn prompt(&self, out: &mut dyn EchoSink) {
-        let prompt = match self.phase {
-            KernelConsolePhase::EarlyBoot => b"bootmon> " as &[u8],
-            KernelConsolePhase::KernelReady => b"kernel> " as &[u8],
-        };
-        write_bytes(out, prompt);
+        write_bytes(out, b"bootmon> ");
     }
 
     pub fn accept(&mut self, byte: u8, out: &mut dyn EchoSink) -> Option<KernelConsoleAction> {
@@ -84,19 +73,13 @@ impl KernelConsole {
         }
     }
 
-    fn command(&mut self, out: &mut dyn EchoSink) -> Option<KernelConsoleAction> {
+    fn command(&mut self, _out: &mut dyn EchoSink) -> Option<KernelConsoleAction> {
         if self.overflowed {
             return None;
         }
         let command = &self.line[..self.len];
         if command == b"boot" {
-            return match self.phase {
-                KernelConsolePhase::EarlyBoot => Some(KernelConsoleAction::Boot),
-                KernelConsolePhase::KernelReady => {
-                    write_bytes(out, b"boot is only available in the early boot console\r\n");
-                    None
-                }
-            };
+            return Some(KernelConsoleAction::Boot);
         }
         if command == b"reboot" {
             return Some(KernelConsoleAction::Reboot);
@@ -134,10 +117,7 @@ impl KernelConsole {
         }
         match &self.line[..self.len] {
             b"help" => write_bytes(out, b"commands: help info boot reboot panic exec [--and-halt|--and-reboot] <path> [args]\r\n"),
-            b"info" => match self.phase {
-                KernelConsolePhase::EarlyBoot => write_bytes(out, b"boot monitor: paging active\r\n"),
-                KernelConsolePhase::KernelReady => write_bytes(out, b"kernel console: kernel ready\r\n"),
-            },
+            b"info" => write_bytes(out, b"boot monitor: paging active\r\n"),
             b"boot" | b"reboot" | b"panic" => {}
             command if command.starts_with(b"exec ") => {
                 write_bytes(out, b"exec requires a non-empty path\r\n");
@@ -158,7 +138,7 @@ impl KernelConsole {
 }
 
 impl Default for KernelConsole {
-    fn default() -> Self { Self::new(KernelConsolePhase::EarlyBoot) }
+    fn default() -> Self { Self::new() }
 }
 
 impl ConsoleEndpoint for KernelConsole {
@@ -184,7 +164,7 @@ pub type EarlyConsoleAction = KernelConsoleAction;
 #[cfg(test)]
 mod tests {
     use alloc::vec::Vec;
-    use super::{KernelConsole, KernelConsoleAction, KernelConsolePhase};
+    use super::{KernelConsole, KernelConsoleAction};
     use crate::kernel::console::session::EchoSink;
 
     #[derive(Default)]
@@ -205,7 +185,7 @@ mod tests {
 
     #[test]
     fn early_boot_boot_is_a_command_action() {
-        let mut console = KernelConsole::new(KernelConsolePhase::EarlyBoot);
+        let mut console = KernelConsole::new();
         let (output, action) = send(&mut console, b"boot\r");
         assert_eq!(action, Some(KernelConsoleAction::Boot));
         assert!(output.starts_with(b"boot\r\n"));
@@ -213,21 +193,21 @@ mod tests {
 
     #[test]
     fn echoes_line_and_help_response() {
-        let mut console = KernelConsole::new(KernelConsolePhase::EarlyBoot);
+        let mut console = KernelConsole::new();
         let (output, _) = send(&mut console, b"help\r");
         assert_eq!(output, b"help\r\ncommands: help info boot reboot panic exec [--and-halt|--and-reboot] <path> [args]\r\nbootmon> ");
     }
 
     #[test]
     fn backspace_edits_the_line() {
-        let mut console = KernelConsole::new(KernelConsolePhase::EarlyBoot);
+        let mut console = KernelConsole::new();
         let (output, _) = send(&mut console, b"helo\x08p\r");
         assert!(output.starts_with(b"helo\x08 \x08p\r\n"));
     }
 
     #[test]
     fn exec_preserves_path_and_arguments() {
-        let mut console = KernelConsole::new(KernelConsolePhase::EarlyBoot);
+        let mut console = KernelConsole::new();
         let (_, action) = send(&mut console, b"exec TESTS/X.COM arg\r");
         assert_eq!(action, Some(KernelConsoleAction::Exec));
         assert_eq!(console.exec_command(), Some(&b"TESTS/X.COM arg"[..]));
@@ -235,7 +215,7 @@ mod tests {
 
     #[test]
     fn exec_post_action_options_are_explicit() {
-        let mut console = KernelConsole::new(KernelConsolePhase::EarlyBoot);
+        let mut console = KernelConsole::new();
         let (_, action) = send(&mut console, b"exec /host/STUB.COM arg\r");
         assert_eq!(action, Some(KernelConsoleAction::Exec));
         assert_eq!(console.exec_command(), Some(&b"/host/STUB.COM arg"[..]));
@@ -255,7 +235,7 @@ mod tests {
 
     #[test]
     fn exec_without_path_is_rejected() {
-        let mut console = KernelConsole::new(KernelConsolePhase::EarlyBoot);
+        let mut console = KernelConsole::new();
         let (output, action) = send(&mut console, b"exec \r");
         assert_eq!(action, None);
         assert!(output.windows(b"exec requires a non-empty path".len())
@@ -264,7 +244,7 @@ mod tests {
 
     #[test]
     fn overlong_command_is_rejected() {
-        let mut console = KernelConsole::new(KernelConsolePhase::EarlyBoot);
+        let mut console = KernelConsole::new();
         let mut input = [b'a'; 258];
         input[257] = b'\r';
         let (output, action) = send(&mut console, &input);
@@ -274,24 +254,10 @@ mod tests {
     }
 
     #[test]
-    fn info_reports_the_active_phase() {
-        let mut early = KernelConsole::new(KernelConsolePhase::EarlyBoot);
-        let (early_output, _) = send(&mut early, b"info\r");
-        assert!(early_output.windows(b"boot monitor: paging active".len())
+    fn info_reports_the_boot_monitor() {
+        let mut console = KernelConsole::new();
+        let (output, _) = send(&mut console, b"info\r");
+        assert!(output.windows(b"boot monitor: paging active".len())
             .any(|window| window == b"boot monitor: paging active"));
-
-        let mut ready = KernelConsole::new(KernelConsolePhase::KernelReady);
-        let (ready_output, _) = send(&mut ready, b"info\r");
-        assert!(ready_output.windows(b"kernel console: kernel ready".len())
-            .any(|window| window == b"kernel console: kernel ready"));
-    }
-
-    #[test]
-    fn kernel_ready_rejects_boot() {
-        let mut console = KernelConsole::new(KernelConsolePhase::KernelReady);
-        let (output, action) = send(&mut console, b"boot\r");
-        assert_eq!(action, None);
-        assert!(output.windows(b"boot is only available in the early boot console".len())
-            .any(|window| window == b"boot is only available in the early boot console"));
     }
 }

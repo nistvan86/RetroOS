@@ -75,7 +75,6 @@ pub fn startup<A: crate::Arch>(
                     lib::term::term(),
                     boot,
                     &mut coordinator,
-                    crate::kernel::console::kernel::KernelConsolePhase::EarlyBoot,
                     poll_input,
                     sync_cursor,
                 ) {
@@ -369,7 +368,6 @@ pub fn startup<A: crate::Arch>(
                     lib::term::term(),
                     boot,
                     &mut coordinator,
-                    crate::kernel::console::kernel::KernelConsolePhase::KernelReady,
                     poll_input,
                     sync_cursor,
                 ) {

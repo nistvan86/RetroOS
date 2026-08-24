@@ -264,7 +264,6 @@ pub unsafe extern "C" fn boot_kernel(magic: u32, info: *const arch::MultibootInf
                     screen,
                     &mut config,
                     &mut coordinator,
-                    crate::kernel::console::kernel::KernelConsolePhase::EarlyBoot,
                     arch::early_console_input,
                     arch::early_console_cursor,
                 ) {
