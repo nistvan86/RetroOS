@@ -10,15 +10,12 @@
 //!   * `drivers` / `fs` — the concrete hardware and on-disk formats
 
 // ── Execution: threads, scheduling, address spaces, loading ──────────────
-pub mod early_console;
 pub mod elf;
 pub mod exec;
 pub mod exec_ctx;
 #[path = "core_bios.rs"]
 pub mod bios_display;
 pub mod sched;
-pub mod serial_console;
-pub mod serial_log;
 pub mod startup;
 pub mod thread;
 
@@ -38,7 +35,10 @@ pub mod stacktrace;
 pub mod block;
 pub mod console;
 pub use console::dos as console_dos;
+pub use console::polling as early_console;
 pub use console::protocol as console_protocol;
+pub use console::serial as serial_console;
+pub use console::serial_log;
 pub use console::session as console_session;
 pub use console::stream as console_tty;
 pub mod display;

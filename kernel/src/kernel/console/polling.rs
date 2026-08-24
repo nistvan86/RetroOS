@@ -1,7 +1,7 @@
-//! Allocation-free command endpoint for the kernel-owned early console.
+//! Polling driver for the kernel console during EarlyBoot and KernelReady.
 
-use super::console_protocol::{ConsoleControl, ConsoleProtocolEvent};
-use super::console_session::{
+use super::protocol::{ConsoleControl, ConsoleProtocolEvent};
+use super::session::{
     ConsoleEndpoint, ConsoleSession, ConsoleSettings, EchoSink, InputDisposition, InputEvent,
     OutputAttachment,
 };

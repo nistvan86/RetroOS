@@ -1,13 +1,12 @@
 //! Serial-console ownership above the polling UART and ambient log sink.
 //!
-//! Stage 4 only adds the early-session RX handoff. TX remains on the existing
-//! serial_log path so there is one compatible serial egress until runtime
-//! session output ownership is implemented.
+//! This module owns the coupled serial attachment valve and protocol RX state;
+//! endpoint selection is coordinated by the parent console coordinator.
 
 use core::sync::atomic::{AtomicU8, AtomicU32, Ordering};
 
 use arch_abi::ComPort;
-use crate::kernel::console_protocol::{ConsoleProtocolDecoder, ConsoleProtocolEvent};
+use super::protocol::{ConsoleProtocolDecoder, ConsoleProtocolEvent};
 use crate::kernel::drivers::uart16550::Uart16550;
 
 const DISABLED: u8 = 0;

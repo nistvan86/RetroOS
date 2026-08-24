@@ -4,6 +4,7 @@ use core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
 use arch_abi::ComPort;
 use crate::kernel::drivers::uart16550::{Uart16550, UartConfig};
+use super::serial;
 
 const DISABLED: u8 = 0;
 const LIVE: u8 = 1;
@@ -85,7 +86,7 @@ fn write_uart_byte(byte: u8) {
 /// Mirror one ambient log byte to the UART while no session owns TX.
 pub fn write_byte(byte: u8) {
     if EMERGENCY.load(Ordering::Relaxed)
-        || crate::kernel::serial_console::ambient_tx_allowed()
+        || serial::ambient_tx_allowed()
     {
         write_uart_byte(byte);
     }
@@ -99,7 +100,7 @@ pub fn enter_emergency() {
 
 /// Write one byte from an attached session through the sole session TX route.
 pub fn write_session_byte(byte: u8) {
-    if crate::kernel::serial_console::session_tx_allowed() {
+    if serial::session_tx_allowed() {
         write_uart_byte(byte);
     }
 }
