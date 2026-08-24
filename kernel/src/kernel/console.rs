@@ -68,6 +68,28 @@ pub fn dispatch<A: crate::Arch>(
     }
 }
 
+/// Deliver already-decoded serial bytes through the existing pipe-backed TTY
+/// adapter. DOS bytes are translated before this point and therefore do not
+/// enter this path.
+pub fn dispatch_serial_bytes<A: crate::Arch>(
+    kt: &thread::KernelThread<A>,
+    personality: &mut thread::Personality<A>,
+    bytes: &[u8],
+) {
+    let tty = match personality {
+        thread::Personality::Linux(_)
+        | thread::Personality::Os2(_)
+        | thread::Personality::Windows(_) => {
+            crate::kernel::console_tty::TtyConsoleAdapter::from_fds(&kt.fds)
+        }
+        thread::Personality::Dos(_) => None,
+    };
+    let Some(mut tty) = tty else { return };
+    for &byte in bytes {
+        tty.deliver_byte(byte);
+    }
+}
+
 /// DOS owner: `blocked` selects the stdin-pipe path (owner is wait4-parked
 /// behind a foreground Linux child).
 fn dispatch_dos<A: crate::Arch>(

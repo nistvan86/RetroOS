@@ -1033,6 +1033,7 @@ pub fn event_loop<A: crate::Arch>(
         stats.slice_begin(machine);
         stats.iteration(machine);
         let mut serial_keys = alloc::vec::Vec::new();
+        let mut serial_bytes = alloc::vec::Vec::new();
         while let Some(event) = crate::kernel::serial_console::try_read_event() {
             match event {
                 crate::kernel::console_protocol::ConsoleProtocolEvent::Control(
@@ -1061,6 +1062,11 @@ pub fn event_loop<A: crate::Arch>(
                     for &scancode in &scancodes[..count] {
                         serial_keys.push(crate::Irq::Key(scancode));
                     }
+                }
+                crate::kernel::console_protocol::ConsoleProtocolEvent::Input(
+                    crate::kernel::console_session::InputEvent::Byte(byte),
+                ) if crate::kernel::serial_console::ordinary_rx_allowed() => {
+                    serial_bytes.push(byte);
                 }
                 crate::kernel::console_protocol::ConsoleProtocolEvent::Input(
                     crate::kernel::console_session::InputEvent::Scancode(_),
@@ -1143,6 +1149,11 @@ pub fn event_loop<A: crate::Arch>(
             &mut thread.personality,
             &mut display,
             events,
+        );
+        crate::kernel::console::dispatch_serial_bytes(
+            &thread.kernel,
+            &mut thread.personality,
+            &serial_bytes,
         );
         stats.part(machine, 3);
         thread

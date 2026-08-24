@@ -5,3 +5,9 @@ windows_watcom_binary(
     src = "hello.c",
     visibility = ["//visibility:public"],
 )
+
+windows_watcom_binary(
+    name = "console_echo",
+    src = "console_echo.c",
+    visibility = ["//visibility:public"],
+)

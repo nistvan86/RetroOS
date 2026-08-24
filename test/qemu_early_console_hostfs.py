@@ -106,6 +106,7 @@ def run_personality_probe(
     directory: str,
     source: str,
     guest_name: str,
+    listening: bytes,
     marker: bytes,
 ) -> None:
     console_socket = os.path.join(directory, f"{guest_name}.console.sock")
@@ -135,7 +136,12 @@ def run_personality_probe(
             read_until(connection, b"early> ", output)
             connection.sendall(f"exec --and-halt /host/{guest_name}\r".encode())
             read_until(connection, b"Starting /host/" + guest_name.encode(), output)
+            read_until(connection, listening, output)
+            before_key = len(output)
+            connection.sendall(b"q")
             read_until(connection, marker, output)
+            if b"q" not in bytes(output[before_key:]):
+                raise AssertionError(f"{guest_name} input was not echoed: {bytes(output)!r}")
     finally:
         qemu.terminate()
         hostfs.terminate()
@@ -222,21 +228,24 @@ def main() -> int:
             directory,
             "bazel-out/k8-opt/bin/test/linux/hello/ECHO.ELF",
             "LINUXECHO.ELF",
-            b"Hello from Linux personality",
+            b"LINUX-ECHO-LISTENING",
+            b"LINUX-ECHO-OK",
         )
         run_personality_probe(
             root,
             directory,
-            "bazel-out/k8-opt/bin/test/os2/hello/hello_lx.exe",
-            "OS2HELLO.EXE",
-            b"Hello from Open Watcom C",
+            "bazel-out/k8-opt/bin/test/os2/hello/console_echo.exe",
+            "OS2ECHO.EXE",
+            b"OS2-ECHO-LISTENING",
+            b"OS2-ECHO-OK",
         )
         run_personality_probe(
             root,
             directory,
-            "bazel-out/k8-opt/bin/test/windows/hello/hello.exe",
-            "WINHELLO.EXE",
-            b"Hello from Open Watcom Win32",
+            "bazel-out/k8-opt/bin/test/windows/hello/console_echo.exe",
+            "WINECHO.EXE",
+            b"WIN-ECHO-LISTENING",
+            b"WIN-ECHO-OK",
         )
 
     print("PASS: QEMU early-console HostFS exec, DOS, Linux, OS/2, and Win32 echo")

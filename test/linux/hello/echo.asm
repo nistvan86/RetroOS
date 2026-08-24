@@ -1,5 +1,4 @@
-; Minimal Linux i386 console-output probe.
-; Exercises the Linux personality's write syscall and console output route.
+; Minimal Linux i386 console input/output probe.
 bits 32
 
 section .text
@@ -8,8 +7,26 @@ global _start
 _start:
     mov eax, 4              ; SYS_write
     mov ebx, 1              ; stdout
-    mov ecx, message
-    mov edx, message_end - message
+    mov ecx, listening
+    mov edx, listening_end - listening
+    int 0x80
+
+    mov eax, 3              ; SYS_read
+    xor ebx, ebx            ; stdin
+    mov ecx, input
+    mov edx, 1
+    int 0x80
+
+    mov eax, 4              ; SYS_write
+    mov ebx, 1              ; stdout
+    mov ecx, input
+    mov edx, 1
+    int 0x80
+
+    mov eax, 4
+    mov ebx, 1
+    mov ecx, complete
+    mov edx, complete_end - complete
     int 0x80
 
     mov eax, 1              ; SYS_exit
@@ -17,5 +34,10 @@ _start:
     int 0x80
 
 section .rodata
-message db "Hello from Linux personality", 13, 10
-message_end:
+listening db "LINUX-ECHO-LISTENING", 13, 10
+listening_end:
+complete db "LINUX-ECHO-OK", 13, 10
+complete_end:
+
+section .bss
+input resb 1
