@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise serial early-console handoff and reboot control frames."""
+"""Exercise serial boot-monitor handoff and reboot control frames."""
 
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ def handoff() -> int:
         qemu.read_until(b"Welcome to RetroOS!")
         qemu.read_until(b"Starting DN...")
         qemu.require(b"help\r\n", b"info\r\n", b"boot\r\n", b"bootmon> boot")
-    print("PASS: QEMU early-console serial handoff")
+    print("PASS: QEMU boot-monitor serial handoff")
     return 0
 
 
@@ -83,7 +83,7 @@ def reboot_early() -> int:
         qemu.send(frame(b"\x01"))  # REBOOT control command
         qemu.read_until_count(b"RetroOS boot monitor", 2)
         qemu.require(b"type help for commands")
-    print("PASS: QEMU serial reboot from early console")
+    print("PASS: QEMU serial reboot from boot monitor")
     return 0
 
 

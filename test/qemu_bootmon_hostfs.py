@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise early-console exec with a stub served from HostFS."""
+"""Exercise boot-monitor exec with a stub served from HostFS."""
 
 from __future__ import annotations
 
@@ -79,7 +79,7 @@ def run_dos_echo_probe(root: str, directory: str, console_mode: str = "bootmon")
         with connect_console(console_socket) as connection:
             output = bytearray()
             read_until(connection, b"bootmon> ", output)
-            connection.sendall(b"exec --and-halt /host/ECHO.COM\r")
+            connection.sendall(b"exec /host/ECHO.COM\r")
             read_until(connection, b"Starting /host/ECHO.COM", output)
             read_until(connection, listening, output)
             before_key = len(output)
@@ -134,7 +134,7 @@ def run_personality_probe(
         with connect_console(console_socket) as connection:
             output = bytearray()
             read_until(connection, b"bootmon> ", output)
-            connection.sendall(f"exec --and-halt /host/{guest_name}\r".encode())
+            connection.sendall(f"exec /host/{guest_name}\r".encode())
             read_until(connection, b"Starting /host/" + guest_name.encode(), output)
             read_until(connection, listening, output)
             before_key = len(output)
@@ -209,7 +209,7 @@ def main() -> int:
                     raise AssertionError(f"HostFS marker was duplicated: {bytes(output)!r}")
                 if b"Starting /host/STUB.COM" not in output:
                     raise AssertionError(f"HostFS executable was not selected: {bytes(output)!r}")
-                read_until(connection, b"kernel> ", output)
+                read_until(connection, b"One-shot complete", output)
                 if b"Starting DN..." in output:
                     raise AssertionError(f"default exec entered DN unexpectedly: {bytes(output)!r}")
                 if "All commands done — shutting down.".encode() in output:
@@ -250,7 +250,7 @@ def main() -> int:
             b"WIN-ECHO-OK",
         )
 
-    print("PASS: QEMU early-console HostFS exec, DOS, Linux, OS/2, and Win32 echo")
+    print("PASS: QEMU boot-monitor HostFS exec, DOS, Linux, OS/2, and Win32 echo")
     return 0
 
 
@@ -258,5 +258,5 @@ if __name__ == "__main__":
     try:
         raise SystemExit(main())
     except (AssertionError, OSError) as error:
-        print(f"FAIL: QEMU early-console HostFS exec: {error}", file=sys.stderr)
+        print(f"FAIL: QEMU boot-monitor HostFS exec: {error}", file=sys.stderr)
         raise SystemExit(1)

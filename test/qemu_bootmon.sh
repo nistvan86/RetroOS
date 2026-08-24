@@ -1,9 +1,9 @@
 #!/bin/bash
-# QEMU early-console stop smoke test.
+# QEMU boot-monitor stop smoke test.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-stage=$(mktemp -d -t retroos-qemu-early-console.XXXXXX)
+stage=$(mktemp -d -t retroos-qemu-bootmon.XXXXXX)
 serial_log="$stage/serial.log"
 debug_log="$stage/debug.log"
 cleanup() {
@@ -49,4 +49,4 @@ test "$(grep -aFc 'Block devices initialized' "$serial_log")" -eq 0
 # emitted through the ambient debugcon mirror.
 test "$(grep -aFc 'RetroOS boot monitor' "$debug_log")" -eq 0
 
-echo "PASS: QEMU early console"
+echo "PASS: QEMU boot monitor"

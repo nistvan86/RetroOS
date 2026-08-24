@@ -661,9 +661,34 @@ fn run<A: crate::Arch>(
     // the normal image and sat at DN. `TEST=` in CONFIG.SYS is the channel that
     // needs no hypervisor cooperation: it travels in the image, so it works on
     // every backend and on real metal too. Same sequence, same shutdown after.
+    if let Some(init_path) = boot.init_path() {
+        loop {
+            let cwd_end = init_path.iter().rposition(|&b| b == b'/').map_or(0, |i| i + 1);
+            let cwd = &init_path[..cwd_end];
+            crate::screenln!(screen, "Starting supervised init {}...",
+                core::str::from_utf8(init_path).unwrap_or("?"));
+            (screen, sb) = run_program_with_screen(
+                machine,
+                bios_workspace,
+                dos_template,
+                threads,
+                coordinator,
+                init_path,
+                b"",
+                cwd,
+                master_env,
+                boot.debug_watch,
+                screen,
+                sb,
+                sink.as_mut(),
+            );
+            crate::screenln!(screen, "Init exited, restarting {}...",
+                core::str::from_utf8(init_path).unwrap_or("?"));
+        }
+    }
+
     let cmdline = boot
         .one_shot()
-        .or_else(|| boot.init_path())
         .or_else(|| boot.cmdline())
         .or_else(|| crate::kernel::dos::config_var(master_env, b"TEST"));
     if let Some(raw) = cmdline {

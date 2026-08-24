@@ -1,5 +1,5 @@
 #!/bin/bash
-# QEMU early-console HostFS executable override smoke test.
+# QEMU boot-monitor HostFS executable override smoke test.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 bazelisk build //:image \

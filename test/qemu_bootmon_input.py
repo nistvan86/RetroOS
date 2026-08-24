@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise serial input, echo, and boot from the early console."""
+"""Exercise serial input, echo, and boot from the boot monitor."""
 
 from __future__ import annotations
 
@@ -42,7 +42,7 @@ def main() -> int:
             qemu.send(b"boot\r")
             qemu.read_until(b"Block devices initialized")
             qemu.require(b"Ring1 entered")
-    print("PASS: QEMU early-console exec" if exec_mode else "PASS: QEMU early-console input")
+    print("PASS: QEMU boot-monitor exec" if exec_mode else "PASS: QEMU boot-monitor input")
     return 0
 
 
