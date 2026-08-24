@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 import socket
 import subprocess
 import sys
@@ -25,6 +26,89 @@ def read_until(sock: socket.socket, marker: bytes, data: bytearray) -> None:
         raise AssertionError(f"did not receive {marker!r}; got {bytes(data)!r}")
 
 
+def protocol_frame(payload: bytes) -> bytes:
+    escaped = payload.replace(b"\x10", b"\x10\x10")
+    return b"\x10\x02" + escaped + b"\x10\x03"
+
+
+def key_event(action: int, scancode: int) -> bytes:
+    return protocol_frame(bytes((0x02, action, scancode)))
+
+
+def connect_console(path: str) -> socket.socket:
+    connection = None
+    deadline = time.monotonic() + 15.0
+    while connection is None and time.monotonic() < deadline:
+        try:
+            connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            connection.connect(path)
+            connection.settimeout(0.25)
+        except OSError:
+            if connection is not None:
+                connection.close()
+            connection = None
+            time.sleep(0.05)
+    if connection is None:
+        raise AssertionError("QEMU console socket did not become available")
+    return connection
+
+
+def assemble_probe(name: str, output: str) -> None:
+    source = Path(__file__).with_name("dos") / "console_hostfs" / f"{name}.asm"
+    subprocess.run(["nasm", "-f", "bin", "-o", output, str(source)], check=True)
+
+
+def run_dos_echo_probe(root: str, directory: str) -> None:
+    console_socket = os.path.join(directory, "echo-console.sock")
+    hostfs_socket = os.path.join(directory, "echo-hostfs.sock")
+    listening = b"DOS-ECHO-LISTENING"
+    marker = b"DOS-ECHO-OK"
+    assemble_probe("echo", os.path.join(root, "ECHO.COM"))
+    hostfs = subprocess.Popen(
+        ["python3", "hostfs.py", root, hostfs_socket],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    qemu = subprocess.Popen(
+        [
+            "qemu-system-i386", "-cpu", "486",
+            "-drive", "file=bazel-bin/image.bin,format=raw,snapshot=on",
+            "-m", "64M", "-display", "none", "-no-reboot",
+            "-serial", f"unix:{console_socket},server=on,wait=on",
+            "-chardev", f"socket,id=hostfs,path={hostfs_socket},server=on,wait=on",
+            "-device", "isa-serial,chardev=hostfs,index=1",
+            "-fw_cfg", "name=opt/cmdline,string=serial=com1 hostfs=com2 earlyconsole",
+        ],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        with connect_console(console_socket) as connection:
+            output = bytearray()
+            read_until(connection, b"early> ", output)
+            connection.sendall(b"exec --and-halt /host/ECHO.COM\r")
+            read_until(connection, b"Starting /host/ECHO.COM", output)
+            read_until(connection, listening, output)
+            before_key = len(output)
+            connection.sendall(key_event(0, 0x10))  # q make
+            connection.sendall(key_event(1, 0x10))  # q break
+            read_until(connection, marker, output)
+            after_key = bytes(output[before_key:])
+            if b"q" not in after_key:
+                raise AssertionError(f"DOS input was not echoed: {after_key!r}")
+            if output.count(marker) != 1:
+                raise AssertionError(f"DOS echo marker was duplicated: {bytes(output)!r}")
+    finally:
+        qemu.terminate()
+        hostfs.terminate()
+        for process in (qemu, hostfs):
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=5)
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory(prefix="retroos-qemu-early-hostfs-") as directory:
         root = os.path.join(directory, "root")
@@ -32,13 +116,8 @@ def main() -> int:
         console_socket = os.path.join(directory, "console.sock")
         hostfs_socket = os.path.join(directory, "hostfs.sock")
 
-        # DOS COM stub: print EARLY-EXEC-HOSTFS-OK through INT 21h/AH=09,
-        # then terminate through INT 21h/AH=4C.
-        marker = b"EARLY-EXEC-HOSTFS-OK$"
-        stub = bytes((0xB4, 0x09, 0xBA, 0x0C, 0x01, 0xCD, 0x21,
-                      0xB8, 0x00, 0x4C, 0xCD, 0x21)) + marker
-        with open(os.path.join(root, "STUB.COM"), "wb") as output:
-            output.write(stub)
+        marker = b"EARLY-EXEC-HOSTFS-OK"
+        assemble_probe("early_exec", os.path.join(root, "STUB.COM"))
 
         hostfs = subprocess.Popen(
             ["python3", "hostfs.py", root, hostfs_socket],
@@ -99,7 +178,9 @@ def main() -> int:
                     process.kill()
                     process.wait(timeout=5)
 
-    print("PASS: QEMU early-console HostFS exec")
+        run_dos_echo_probe(root, directory)
+
+    print("PASS: QEMU early-console HostFS exec and DOS echo")
     return 0
 
 
