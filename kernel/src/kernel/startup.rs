@@ -70,7 +70,7 @@ pub fn startup<A: crate::Arch>(
     // backend-neutral early console before personality selection; its local
     // input comes from the existing interp IRQ queue (stdin or SDL).
     if boot.console == Some(arch_abi::ConsoleBootStage::Early) {
-        match crate::kernel::early_console::run(
+        match crate::kernel::console::polling::run(
                     machine,
                     lib::term::term(),
                     boot,
@@ -79,12 +79,12 @@ pub fn startup<A: crate::Arch>(
                     poll_input,
                     sync_cursor,
                 ) {
-            crate::kernel::early_console::EarlyConsoleAction::Boot
-            | crate::kernel::early_console::EarlyConsoleAction::Exec => {
-                crate::kernel::serial_console::detach_to_logging();
+            crate::kernel::console::polling::EarlyConsoleAction::Boot
+            | crate::kernel::console::polling::EarlyConsoleAction::Exec => {
+                crate::kernel::console::serial::detach_to_logging();
             }
-            crate::kernel::early_console::EarlyConsoleAction::Reboot => unreachable!(),
-                        crate::kernel::early_console::EarlyConsoleAction::Panic => {
+            crate::kernel::console::polling::EarlyConsoleAction::Reboot => unreachable!(),
+                        crate::kernel::console::polling::EarlyConsoleAction::Panic => {
                             panic!("early console panic requested");
                         }
         }
@@ -345,7 +345,7 @@ pub fn startup<A: crate::Arch>(
     let mut dos_template = crate::kernel::dos::DosTemplate::new(machine);
 
     if boot.console == Some(arch_abi::ConsoleBootStage::Kernel) {
-        match crate::kernel::early_console::run(
+        match crate::kernel::console::polling::run(
             machine,
             lib::term::term(),
             boot,
@@ -354,12 +354,12 @@ pub fn startup<A: crate::Arch>(
             poll_input,
             sync_cursor,
         ) {
-            crate::kernel::early_console::EarlyConsoleAction::Exec => {
+            crate::kernel::console::polling::EarlyConsoleAction::Exec => {
                 boot.console = None;
             }
-            crate::kernel::early_console::EarlyConsoleAction::Boot => unreachable!(),
-            crate::kernel::early_console::EarlyConsoleAction::Reboot => unreachable!(),
-            crate::kernel::early_console::EarlyConsoleAction::Panic => unreachable!(),
+            crate::kernel::console::polling::EarlyConsoleAction::Boot => unreachable!(),
+            crate::kernel::console::polling::EarlyConsoleAction::Reboot => unreachable!(),
+            crate::kernel::console::polling::EarlyConsoleAction::Panic => unreachable!(),
         }
     }
 
@@ -382,7 +382,7 @@ pub fn startup<A: crate::Arch>(
         match result.action {
             RunAction::ReturnToKernelConsole => {
                 next_context = result.context;
-                match crate::kernel::early_console::run(
+                match crate::kernel::console::polling::run(
                     machine,
                     lib::term::term(),
                     boot,
@@ -391,12 +391,12 @@ pub fn startup<A: crate::Arch>(
                     poll_input,
                     sync_cursor,
                 ) {
-                    crate::kernel::early_console::EarlyConsoleAction::Exec => {
+                    crate::kernel::console::polling::EarlyConsoleAction::Exec => {
                         boot.console = None;
                     }
-                    crate::kernel::early_console::EarlyConsoleAction::Boot => unreachable!(),
-                    crate::kernel::early_console::EarlyConsoleAction::Reboot => unreachable!(),
-                    crate::kernel::early_console::EarlyConsoleAction::Panic => unreachable!(),
+                    crate::kernel::console::polling::EarlyConsoleAction::Boot => unreachable!(),
+                    crate::kernel::console::polling::EarlyConsoleAction::Reboot => unreachable!(),
+                    crate::kernel::console::polling::EarlyConsoleAction::Panic => unreachable!(),
                 }
             }
         }
@@ -1136,7 +1136,7 @@ pub fn event_loop<A: crate::Arch>(
         }
         let mut events = crate::kernel::irq_dispatch::drain(machine);
         for input in serial_inputs.iter().copied() {
-            if let crate::kernel::console_session::InputEvent::Scancode(scancode) = input {
+            if let crate::kernel::console::session::InputEvent::Scancode(scancode) = input {
                 events.push(crate::Irq::Key(scancode));
             }
         }
@@ -1214,13 +1214,13 @@ pub fn event_loop<A: crate::Arch>(
             events,
         );
         for input in serial_inputs {
-            if let crate::kernel::console_session::InputEvent::Byte(byte) = input {
+            if let crate::kernel::console::session::InputEvent::Byte(byte) = input {
                 let _ = coordinator.deliver_personality(
                     machine,
                     &mut ctx.regs,
                     &mut thread.kernel,
                     &mut thread.personality,
-                    crate::kernel::console_session::InputEvent::Byte(byte),
+                    crate::kernel::console::session::InputEvent::Byte(byte),
                 );
             }
         }

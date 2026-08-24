@@ -55,7 +55,7 @@ pub fn dispatch<A: crate::Arch>(
                     regs,
                     kt,
                     personality,
-                    crate::kernel::console_session::InputEvent::Scancode(scancode),
+                    crate::kernel::console::session::InputEvent::Scancode(scancode),
                 );
             }
             event if matches!(personality, thread::Personality::Dos(_)) && !blocked => {

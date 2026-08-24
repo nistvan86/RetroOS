@@ -69,7 +69,7 @@ fn decode(port: u8) -> Option<ComPort> {
 
 /// Initialize the existing ambient-log UART owner and enter fallback logging.
 pub fn init_log(port: ComPort) -> bool {
-    if !crate::kernel::serial_log::init(port) {
+    if !crate::kernel::console::serial_log::init(port) {
         STATE.store(FAILED, Ordering::Release);
         return false;
     }

@@ -878,7 +878,7 @@ fn sys_write<A: crate::Arch>(machine: &mut A, kt: &mut thread::KernelThread<A>, 
         thread::FdKind::ConsoleOut => {
             let mut tmp = alloc::vec![0u8; len];
             machine.copy_from(buf, &mut tmp);
-            crate::kernel::console_tty::write_console_bytes(&tmp);
+            crate::kernel::console::stream::write_console_bytes(&tmp);
             SyscallResult::val(len as i32)
         }
         thread::FdKind::PipeWrite(idx) => {
@@ -1614,7 +1614,7 @@ fn sys_writev<A: crate::Arch>(machine: &mut A, kt: &mut thread::KernelThread<A>,
         machine.copy_from(iov_base, &mut iov);
         match fd_kind {
             thread::FdKind::ConsoleOut => {
-                crate::kernel::console_tty::write_console_bytes(&iov);
+                crate::kernel::console::stream::write_console_bytes(&iov);
                 total += iov_len as i32;
             }
             thread::FdKind::PipeWrite(idx) => {

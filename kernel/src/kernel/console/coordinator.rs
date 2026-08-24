@@ -156,7 +156,7 @@ pub fn write_output(origin: OutputOrigin, bytes: &[u8]) {
     }
     if output_serial(origin) {
         for &byte in bytes {
-            crate::kernel::serial_log::write_session_byte(byte);
+            crate::kernel::console::serial_log::write_session_byte(byte);
         }
     }
 }

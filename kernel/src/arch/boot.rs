@@ -28,7 +28,7 @@ fn log_byte(b: u8) {
     x86::outb(0xE9, b);
 
     // Mirror to the configured physical serial console once it is active.
-    crate::kernel::serial_log::write_byte(b);
+    crate::kernel::console::serial_log::write_byte(b);
 }
 
 /// Magic value the Multiboot bootloader places in EAX before jumping to us.
@@ -162,7 +162,7 @@ pub unsafe extern "C" fn boot_kernel(magic: u32, info: *const arch::MultibootInf
     // and this read needs neither the heap nor interrupts.
     let mut config = read_boot_config(&boot_cmdline[..boot_cmdline_len]);
     if let Some(port) = config.serial_console_port {
-        if crate::kernel::serial_console::init_log(port) {
+        if crate::kernel::console::serial::init_log(port) {
             crate::println!("serial: {:?} logging enabled at 115200 8N1", port);
         } else {
             crate::println!("serial: {:?} unavailable", port);
@@ -259,7 +259,7 @@ pub unsafe extern "C" fn boot_kernel(magic: u32, info: *const arch::MultibootInf
     let mut coordinator = crate::kernel::console::coordinator::ConsoleCoordinator::new();
 
     if config.console == Some(arch_abi::ConsoleBootStage::Early) {
-        match crate::kernel::early_console::run(
+        match crate::kernel::console::polling::run(
                     &mut machine,
                     screen,
                     &mut config,
@@ -268,16 +268,16 @@ pub unsafe extern "C" fn boot_kernel(magic: u32, info: *const arch::MultibootInf
                     arch::early_console_input,
                     arch::early_console_cursor,
                 ) {
-            crate::kernel::early_console::EarlyConsoleAction::Boot
-            | crate::kernel::early_console::EarlyConsoleAction::Exec => {
+            crate::kernel::console::polling::EarlyConsoleAction::Boot
+            | crate::kernel::console::polling::EarlyConsoleAction::Exec => {
                 // The directive is a one-shot boot stop. Startup also has a
                 // common hosted/play entrypoint, so do not enter the monitor a
                 // second time after this metal pre-ring-1 handoff.
                 config.console = None;
-                crate::kernel::serial_console::detach_to_logging();
+                crate::kernel::console::serial::detach_to_logging();
             }
-            crate::kernel::early_console::EarlyConsoleAction::Reboot => unreachable!(),
-                        crate::kernel::early_console::EarlyConsoleAction::Panic => {
+            crate::kernel::console::polling::EarlyConsoleAction::Reboot => unreachable!(),
+                        crate::kernel::console::polling::EarlyConsoleAction::Panic => {
                             panic!("early console panic requested");
                         }
         }
@@ -410,7 +410,7 @@ fn read_boot_config(multiboot_cmdline: &[u8]) -> crate::BootConfig {
 /// `#[cfg]`'d item in the backend-agnostic kernel crate.
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
-    crate::kernel::serial_log::enter_emergency();
+    crate::kernel::console::serial_log::enter_emergency();
 
     // Stop HDA DMA and hold its link in reset first: a hard reboot from a
     // panic mid-stream can wedge the codec until a cold power-off.
