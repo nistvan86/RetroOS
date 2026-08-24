@@ -28,6 +28,31 @@ def handoff() -> int:
     return 0
 
 
+def ctrl_alt_delete_sequence() -> bytes:
+    events = (
+        (0, 0x1D),  # Ctrl down
+        (0, 0x38),  # Alt down
+        (0, 0xE0),  # Delete extended prefix down
+        (0, 0x53),  # Delete down
+        (1, 0xE0),  # Delete extended prefix up
+        (1, 0x53),  # Delete up
+        (1, 0x38),  # Alt up
+        (1, 0x1D),  # Ctrl up
+    )
+    return b"".join(frame(bytes((0x02, action, scancode)))
+                   for action, scancode in events)
+
+
+def key_sequence_early() -> int:
+    with QemuSerialTest() as qemu:
+        qemu.read_until(b"early> ")
+        qemu.send(ctrl_alt_delete_sequence())
+        qemu.send(b"help\r")
+        qemu.read_until(b"commands: help info resume reboot")
+    print("PASS: QEMU serial Ctrl-Alt-Delete make/break sequence")
+    return 0
+
+
 def reboot_early() -> int:
     with QemuSerialTest(no_reboot=False) as qemu:
         qemu.read_until(b"early> ")
@@ -43,6 +68,7 @@ def reboot_dn() -> int:
         qemu.read_until(b"early> ")
         qemu.send(b"resume\r")
         qemu.read_until(b"Starting DN...")
+        qemu.send(ctrl_alt_delete_sequence())
         qemu.send(frame(b"\x01"))  # REBOOT control command
         qemu.read_until_count(b"RetroOS Rust Kernel", 2)
         # The fw_cfg command line still requests earlyconsole after reset, so
@@ -54,6 +80,8 @@ def reboot_dn() -> int:
 
 def main() -> int:
     mode = sys.argv[1] if len(sys.argv) > 1 else "handoff"
+    if mode == "keys-early":
+        return key_sequence_early()
     if mode == "reboot-early":
         return reboot_early()
     if mode == "reboot-dos":

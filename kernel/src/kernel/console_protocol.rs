@@ -18,6 +18,7 @@ const ETX: u8 = 0x03;
 const REBOOT: u8 = 0x01;
 const KEY_EVENT: u8 = 0x02;
 const MAX_FRAME: usize = 8;
+const FRAME_TIMEOUT_NS: u64 = 1_000_000_000;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ConsoleControl {
@@ -41,15 +42,23 @@ enum State {
 pub struct ConsoleProtocolDecoder {
     state: State,
     frame: [u8; MAX_FRAME],
+    last_activity_ns: Option<u64>,
 }
 
 impl ConsoleProtocolDecoder {
     pub const fn new() -> Self {
-        Self { state: State::Raw, frame: [0; MAX_FRAME] }
+        Self { state: State::Raw, frame: [0; MAX_FRAME], last_activity_ns: None }
     }
 
     pub fn feed(&mut self, byte: u8) -> Option<ConsoleProtocolEvent> {
-        match self.state {
+        self.feed_at(byte, 0)
+    }
+
+    /// Feed a byte with a monotonic timestamp. A stale partial frame is
+    /// discarded before this byte is interpreted as new input.
+    pub fn feed_at(&mut self, byte: u8, now_ns: u64) -> Option<ConsoleProtocolEvent> {
+        self.expire(now_ns);
+        let event = match self.state {
             State::Raw => {
                 if byte == DLE {
                     self.state = State::RawDle;
@@ -98,6 +107,25 @@ impl ConsoleProtocolDecoder {
                     None
                 }
             },
+        };
+        self.last_activity_ns = if matches!(self.state, State::Raw) {
+            None
+        } else {
+            Some(now_ns)
+        };
+        event
+    }
+
+    /// Discard a partial frame after an idle interval so a dropped transport
+    /// cannot permanently capture subsequent terminal bytes.
+    pub fn expire(&mut self, now_ns: u64) {
+        if !matches!(self.state, State::Raw)
+            && self.last_activity_ns.is_some_and(|last| {
+                now_ns.saturating_sub(last) >= FRAME_TIMEOUT_NS
+            })
+        {
+            self.state = State::Raw;
+            self.last_activity_ns = None;
         }
     }
 
@@ -173,5 +201,16 @@ mod tests {
         assert_eq!(feed(&mut decoder, &[DLE, DLE]), alloc::vec![
             ConsoleProtocolEvent::Input(InputEvent::Byte(DLE)),
         ]);
+    }
+
+    #[test]
+    fn stale_partial_frame_returns_to_raw_mode() {
+        let mut decoder = ConsoleProtocolDecoder::new();
+        assert_eq!(decoder.feed_at(DLE, 1), None);
+        assert_eq!(decoder.feed_at(STX, 2), None);
+        decoder.expire(FRAME_TIMEOUT_NS + 2);
+        assert_eq!(decoder.feed_at(b'x', FRAME_TIMEOUT_NS + 3), Some(
+            ConsoleProtocolEvent::Input(InputEvent::Byte(b'x')),
+        ));
     }
 }

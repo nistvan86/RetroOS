@@ -97,16 +97,17 @@ pub fn detach_to_logging() {
 ///
 /// Protocol controls are recognized in every live state, including
 /// `PollingLog`, so reboot does not depend on an attached personality.
-pub fn try_read_event() -> Option<ConsoleProtocolEvent> {
+pub fn try_read_event(now_ns: u64) -> Option<ConsoleProtocolEvent> {
     let state = STATE.load(Ordering::Acquire);
     if state == DISABLED || state == FAILED {
         return None;
     }
     let port = decode(PORT.load(Ordering::Acquire))?;
+    let decoder = &raw mut DECODER;
+    unsafe { (*decoder).expire(now_ns); }
     for _ in 0..64 {
         let byte = Uart16550::new(port).try_read_byte()?;
-        let decoder = &raw mut DECODER;
-        let event = unsafe { (*decoder).feed(byte) };
+        let event = unsafe { (*decoder).feed_at(byte, now_ns) };
         if event.is_some() {
             return event;
         }

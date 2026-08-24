@@ -1019,19 +1019,26 @@ pub fn event_loop<A: crate::Arch>(
     loop {
         stats.slice_begin(machine);
         stats.iteration(machine);
-        while let Some(event) = crate::kernel::serial_console::try_read_event() {
-            if matches!(
-                event,
+        let mut serial_keys = alloc::vec::Vec::new();
+        while let Some(event) = crate::kernel::serial_console::try_read_event(machine.now()) {
+            match event {
                 crate::kernel::console_protocol::ConsoleProtocolEvent::Control(
-                    crate::kernel::console_protocol::ConsoleControl::Reboot
-                )
-            ) {
-                crate::println!("serial control: reboot requested");
-                crate::kernel::drivers::hda::emergency_quiesce();
-                machine.reboot();
+                    crate::kernel::console_protocol::ConsoleControl::Reboot,
+                ) => {
+                    crate::println!("serial control: reboot requested");
+                    crate::kernel::drivers::hda::emergency_quiesce();
+                    machine.reboot();
+                }
+                crate::kernel::console_protocol::ConsoleProtocolEvent::Input(
+                    crate::kernel::console_session::InputEvent::Scancode(scancode),
+                ) => serial_keys.push(crate::Irq::Key(scancode)),
+                crate::kernel::console_protocol::ConsoleProtocolEvent::Input(
+                    crate::kernel::console_session::InputEvent::Byte(_),
+                ) => {}
             }
         }
         let mut events = crate::kernel::irq_dispatch::drain(machine);
+        events.extend(serial_keys);
         stats.part(machine, 1);
         let tick_wakeup = events
             .iter()
