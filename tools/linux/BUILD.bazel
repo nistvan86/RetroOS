@@ -1,0 +1,23 @@
+load("@rules_rust//rust:defs.bzl", "rust_binary")
+load("//toolchain:musl_transition.bzl", "musl_binary")
+
+rust_binary(
+    name = "reboot_bin",
+    srcs = ["reboot.rs"],
+    edition = "2024",
+    rustc_flags = [
+        "-Copt-level=s",
+        "-Cstrip=symbols",
+        "-Clinker-flavor=ld.lld",
+        "-Clinker=rust-lld",
+        "-Ctarget-cpu=i486",
+        "-Cpanic=abort",
+        "-Clink-arg=-lc",
+    ],
+)
+
+musl_binary(
+    name = "reboot_elf",
+    binary = ":reboot_bin",
+    visibility = ["//visibility:public"],
+)
