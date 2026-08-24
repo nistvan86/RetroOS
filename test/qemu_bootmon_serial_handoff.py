@@ -17,7 +17,7 @@ def handoff() -> int:
     with QemuSerialTest() as qemu:
         qemu.read_until(b"bootmon> ")
         qemu.send(b"help\r")
-        qemu.read_until(b"commands: help info boot reboot")
+        qemu.read_until(b"commands: boot, init")
         qemu.send(b"info\r")
         qemu.read_until(b"boot monitor: paging active")
         qemu.send(b"boot\r")
@@ -48,7 +48,7 @@ def key_sequence_early() -> int:
         qemu.read_until(b"bootmon> ")
         qemu.send(ctrl_alt_delete_sequence())
         qemu.send(b"help\r")
-        qemu.read_until(b"commands: help info boot reboot")
+        qemu.read_until(b"commands: boot, init")
     print("PASS: QEMU serial Ctrl-Alt-Delete make/break sequence")
     return 0
 

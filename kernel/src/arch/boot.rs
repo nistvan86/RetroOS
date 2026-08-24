@@ -268,6 +268,7 @@ pub unsafe extern "C" fn boot_kernel(magic: u32, info: *const arch::MultibootInf
                     arch::early_console_cursor,
                 ) {
             crate::kernel::console::polling::EarlyConsoleAction::Boot
+            | crate::kernel::console::polling::EarlyConsoleAction::Init
             | crate::kernel::console::polling::EarlyConsoleAction::Exec => {
                 // The directive is a one-shot boot stop. Startup also has a
                 // common hosted/play entrypoint, so do not enter the monitor a

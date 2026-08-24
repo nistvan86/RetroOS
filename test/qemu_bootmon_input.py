@@ -29,7 +29,7 @@ def main() -> int:
         qemu.read_until(b"bootmon> ")
 
         qemu.send(b"help\r")
-        qemu.read_until(b"commands: help info boot reboot")
+        qemu.read_until(b"commands: boot, init")
         qemu.require(b"help\r\n")
 
         if exec_mode:

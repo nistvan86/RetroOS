@@ -96,6 +96,8 @@ pub fn run<A: crate::Arch>(
         for input in [serial_input, local_input].into_iter().flatten() {
             let mut command = [0; 256];
             let mut command_len = 0;
+            let mut init = [0; 256];
+            let mut init_len = 0;
 
             let action = {
                 let delivery = coordinator.deliver_kernel(
@@ -106,11 +108,15 @@ pub fn run<A: crate::Arch>(
                     input,
                 );
                 let action = delivery.action;
-                if action == Some(KernelConsoleAction::Exec) {
+                if action == Some(KernelConsoleAction::Init) {
+                    if let Some(path) = delivery.init_path() {
+                        init_len = path.len();
+                        init[..init_len].copy_from_slice(path);
+                    }
+                } else if action == Some(KernelConsoleAction::Exec) {
                     if let Some(path) = delivery.exec_path() {
                         command_len = path.len();
                         command[..command_len].copy_from_slice(path);
-
                     }
                 }
                 action
@@ -120,9 +126,17 @@ pub fn run<A: crate::Arch>(
             let result = match action {
                 KernelConsoleAction::Boot => {
                     boot.clear_launch_cmdline();
+                    boot.clear_one_shot();
                     EarlyConsoleAction::Boot
                 }
+                KernelConsoleAction::Init if init_len != 0 => {
+                    boot.set_init_path(&init[..init_len]);
+                    boot.clear_one_shot();
+                    EarlyConsoleAction::Boot
+                }
+                KernelConsoleAction::Init => continue,
                 KernelConsoleAction::Exec if command_len != 0 => {
+                    boot.clear_init_path();
                     boot.set_one_shot(&command[..command_len]);
                     EarlyConsoleAction::Exec
                 }

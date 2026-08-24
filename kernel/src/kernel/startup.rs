@@ -79,6 +79,7 @@ pub fn startup<A: crate::Arch>(
                     sync_cursor,
                 ) {
             crate::kernel::console::polling::EarlyConsoleAction::Boot
+            | crate::kernel::console::polling::EarlyConsoleAction::Init
             | crate::kernel::console::polling::EarlyConsoleAction::Exec => {
                 crate::kernel::console::serial::detach_to_logging();
             }

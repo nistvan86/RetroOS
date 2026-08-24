@@ -11,4 +11,4 @@ bazelisk build //:image \
   //test/windows/hello:console_echo \
   //apps/windows/kernel32:kernel32_dll \
   //apps/windows/user32:user32_dll >/dev/null
-python3 test/qemu_early_console_hostfs.py
+python3 test/qemu_bootmon_hostfs.py

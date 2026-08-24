@@ -6,6 +6,7 @@ use super::session::{ConsoleEndpoint, EchoSink, InputDisposition, InputEvent};
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum KernelConsoleAction {
     Boot,
+    Init,
     Exec,
     Reboot,
     Panic,
@@ -16,6 +17,8 @@ pub struct KernelConsole {
     line: [u8; 256],
     len: usize,
     overflowed: bool,
+    init: [u8; 256],
+    init_len: usize,
     exec: [u8; 256],
     exec_len: usize,
     pending_action: Option<KernelConsoleAction>,
@@ -28,6 +31,8 @@ impl KernelConsole {
             line: [0; 256],
             len: 0,
             overflowed: false,
+            init: [0; 256],
+            init_len: 0,
             exec: [0; 256],
             exec_len: 0,
             pending_action: None,
@@ -86,6 +91,14 @@ impl KernelConsole {
         if command == b"panic" {
             return Some(KernelConsoleAction::Panic);
         }
+        if command.starts_with(b"init ") {
+            let path = &command[5..];
+            if !path.is_empty() && path.len() <= self.init.len() {
+                self.init[..path.len()].copy_from_slice(path);
+                self.init_len = path.len();
+                return Some(KernelConsoleAction::Init);
+            }
+        }
         if command.starts_with(b"exec ") {
             let path = &command[5..];
             if !path.is_empty() && path.len() <= self.exec.len() {
@@ -103,14 +116,21 @@ impl KernelConsole {
             return;
         }
         match &self.line[..self.len] {
-            b"help" => write_bytes(out, b"commands: help info boot reboot panic exec <path> [args]\r\n"),
+            b"help" => write_bytes(out, b"commands: boot, init <path>, exec <path> [args], help, info, reboot, panic\r\n"),
             b"info" => write_bytes(out, b"boot monitor: paging active\r\n"),
             b"boot" | b"reboot" | b"panic" => {}
+            command if command.starts_with(b"init ") => {
+                write_bytes(out, b"init requires a non-empty path\r\n");
+            }
             command if command.starts_with(b"exec ") => {
                 write_bytes(out, b"exec requires a non-empty path\r\n");
             }
             _ => write_bytes(out, b"unknown command\r\n"),
         }
+    }
+
+    pub fn init_command(&self) -> Option<&[u8]> {
+        (self.init_len != 0).then_some(&self.init[..self.init_len])
     }
 
     pub fn exec_command(&self) -> Option<&[u8]> {
@@ -181,7 +201,7 @@ mod tests {
     fn echoes_line_and_help_response() {
         let mut console = KernelConsole::new();
         let (output, _) = send(&mut console, b"help\r");
-        assert_eq!(output, b"help\r\ncommands: help info boot reboot panic exec <path> [args]\r\nbootmon> ");
+        assert_eq!(output, b"help\r\ncommands: boot, init <path>, exec <path> [args], help, info, reboot, panic\r\nbootmon> ");
     }
 
     #[test]
@@ -189,6 +209,14 @@ mod tests {
         let mut console = KernelConsole::new();
         let (output, _) = send(&mut console, b"helo\x08p\r");
         assert!(output.starts_with(b"helo\x08 \x08p\r\n"));
+    }
+
+    #[test]
+    fn init_preserves_path() {
+        let mut console = KernelConsole::new();
+        let (_, action) = send(&mut console, b"init /bin/sh\r");
+        assert_eq!(action, Some(KernelConsoleAction::Init));
+        assert_eq!(console.init_command(), Some(&b"/bin/sh"[..]));
     }
 
     #[test]

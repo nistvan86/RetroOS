@@ -38,12 +38,17 @@ pub struct KernelConsoleInputContext<'a, V: OutputAttachment, S: OutputAttachmen
 pub struct KernelConsoleDelivery {
     pub disposition: InputDisposition,
     pub action: Option<KernelConsoleAction>,
+    init: [u8; 256],
+    init_len: usize,
     exec: [u8; 256],
     exec_len: usize,
-
 }
 
 impl KernelConsoleDelivery {
+    pub fn init_path(&self) -> Option<&[u8]> {
+        (self.init_len != 0).then_some(&self.init[..self.init_len])
+    }
+
     pub fn exec_path(&self) -> Option<&[u8]> {
         (self.exec_len != 0).then_some(&self.exec[..self.exec_len])
     }
@@ -104,6 +109,8 @@ impl ConsoleCoordinator {
         let mut result = KernelConsoleDelivery {
             disposition: InputDisposition::Ignored,
             action: None,
+            init: [0; 256],
+            init_len: 0,
             exec: [0; 256],
             exec_len: 0,
 
@@ -122,11 +129,15 @@ impl ConsoleCoordinator {
         );
         result.disposition = session.input(input);
         result.action = session.endpoint_mut().take_action();
-        if result.action == Some(KernelConsoleAction::Exec) {
+        if result.action == Some(KernelConsoleAction::Init) {
+            if let Some(path) = session.endpoint_mut().init_command() {
+                result.init_len = path.len();
+                result.init[..result.init_len].copy_from_slice(path);
+            }
+        } else if result.action == Some(KernelConsoleAction::Exec) {
             if let Some(path) = session.endpoint_mut().exec_command() {
                 result.exec_len = path.len();
                 result.exec[..result.exec_len].copy_from_slice(path);
-
             }
         }
         result
@@ -321,8 +332,8 @@ mod tests {
             }
             assert_eq!(last.unwrap().disposition, InputDisposition::Consumed);
             assert_eq!(video.0, serial.0);
-            assert!(video.0.windows(b"commands: help".len())
-                .any(|window| window == b"commands: help"));
+            assert!(video.0.windows(b"commands: boot".len())
+                .any(|window| window == b"commands: boot"));
     }
 
     #[test]
