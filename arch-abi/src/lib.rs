@@ -102,7 +102,8 @@ pub struct BootConfig {
     cmdline_len: Option<usize>, // None = no headless cmdline (interactive DN loop)
     init: [u8; 256],
     init_len: Option<usize>,
-    one_shot: [u8; 4096],
+    // Boot-monitor commands are bounded by the 256-byte console command buffer.
+    one_shot: [u8; 256],
     one_shot_len: Option<usize>,
     cwd: [u8; 256],
     cwd_len: Option<usize>,
@@ -155,7 +156,7 @@ impl BootConfig {
         let mut cfg = BootConfig {
             cmdline: [0; 4096], cmdline_len: None,
             init: [0; 256], init_len: None,
-            one_shot: [0; 4096], one_shot_len: None,
+            one_shot: [0; 256], one_shot_len: None,
             cwd: [0; 256], cwd_len: None,
             c_root: [0; 128], c_root_len: 0,
             debug_watch: None, is_qemu: false, audio_mixed: false,
