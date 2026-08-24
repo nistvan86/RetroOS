@@ -53,6 +53,16 @@ def key_sequence_early() -> int:
     return 0
 
 
+def panic_early() -> int:
+    with QemuSerialTest() as qemu:
+        qemu.read_until(b"early> ")
+        qemu.send(b"panic\r")
+        qemu.read_until(b"!!! KERNEL PANIC !!!")
+        qemu.read_until(b"early console panic requested")
+    print("PASS: QEMU panic emergency serial output")
+    return 0
+
+
 def reboot_early() -> int:
     with QemuSerialTest(no_reboot=False) as qemu:
         qemu.read_until(b"early> ")
@@ -82,6 +92,8 @@ def main() -> int:
     mode = sys.argv[1] if len(sys.argv) > 1 else "handoff"
     if mode == "keys-early":
         return key_sequence_early()
+    if mode == "panic-early":
+        return panic_early()
     if mode == "reboot-early":
         return reboot_early()
     if mode == "reboot-dos":

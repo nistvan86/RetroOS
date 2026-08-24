@@ -403,6 +403,8 @@ fn read_boot_config(multiboot_cmdline: &[u8]) -> crate::BootConfig {
 /// `#[cfg]`'d item in the backend-agnostic kernel crate.
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
+    crate::kernel::serial_log::enter_emergency();
+
     // Stop HDA DMA and hold its link in reset first: a hard reboot from a
     // panic mid-stream can wedge the codec until a cold power-off.
     crate::kernel::drivers::hda::emergency_quiesce();

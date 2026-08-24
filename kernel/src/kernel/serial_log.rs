@@ -17,6 +17,7 @@ const TX_READY_POLLS: u32 = 100_000;
 static STATE: AtomicU8 = AtomicU8::new(DISABLED);
 static PORT: AtomicU8 = AtomicU8::new(0);
 static PREVIOUS_WAS_CR: AtomicBool = AtomicBool::new(false);
+static EMERGENCY: AtomicBool = AtomicBool::new(false);
 
 const fn encode_port(port: ComPort) -> u8 {
     match port {
@@ -83,9 +84,17 @@ fn write_uart_byte(byte: u8) {
 
 /// Mirror one ambient log byte to the UART while no session owns TX.
 pub fn write_byte(byte: u8) {
-    if crate::kernel::serial_console::ambient_tx_allowed() {
+    if EMERGENCY.load(Ordering::Relaxed)
+        || crate::kernel::serial_console::ambient_tx_allowed()
+    {
         write_uart_byte(byte);
     }
+}
+
+/// Allow panic output to bypass attached-session ownership until the machine
+/// halts. This is intentionally one-way; no running session survives a panic.
+pub fn enter_emergency() {
+    EMERGENCY.store(true, Ordering::Relaxed);
 }
 
 /// Write one byte from an attached session through the sole session TX route.

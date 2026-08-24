@@ -84,6 +84,9 @@ impl EarlyConsole {
         if command == b"reboot" {
             return Some(EarlyConsoleAction::Reboot);
         }
+        if command == b"panic" {
+            panic!("early console panic requested");
+        }
         if command.starts_with(b"exec ") {
             let mut path = &command[5..];
             let mut post_exec = arch_abi::PostExecAction::ContinueToDn;
@@ -114,9 +117,9 @@ impl EarlyConsole {
             return;
         }
         match &self.line[..self.len] {
-            b"help" => write_bytes(out, b"commands: help info resume reboot exec [--and-dn|--and-halt|--and-reboot] <path> [args]\r\n"),
+            b"help" => write_bytes(out, b"commands: help info resume reboot panic exec [--and-dn|--and-halt|--and-reboot] <path> [args]\r\n"),
             b"info" => write_bytes(out, b"early console: paging active\r\n"),
-            b"resume" | b"reboot" => {}
+            b"resume" | b"reboot" | b"panic" => {}
             command if command.starts_with(b"exec ") => {
                 write_bytes(out, b"exec requires a non-empty path\r\n");
             }
@@ -307,7 +310,7 @@ mod tests {
     fn echoes_line_and_help_response() {
         let mut console = EarlyConsole::new();
         let (output, _) = send(&mut console, b"help\r");
-        assert_eq!(output, b"help\r\ncommands: help info resume reboot exec [--and-dn|--and-halt|--and-reboot] <path> [args]\r\nearly> ");
+        assert_eq!(output, b"help\r\ncommands: help info resume reboot panic exec [--and-dn|--and-halt|--and-reboot] <path> [args]\r\nearly> ");
     }
 
     #[test]
