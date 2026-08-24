@@ -207,7 +207,7 @@ pub fn run<A: crate::Arch>(
     session.write_bytes(b"early> ");
 
     loop {
-        if let Some(event) = crate::kernel::serial_console::try_read_event(machine.now()) {
+        if let Some(event) = crate::kernel::serial_console::try_read_event() {
             let input = match event {
                 ConsoleProtocolEvent::Control(ConsoleControl::Reboot) => {
                     crate::println!("serial control: reboot requested");

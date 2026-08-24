@@ -1032,7 +1032,7 @@ pub fn event_loop<A: crate::Arch>(
         stats.slice_begin(machine);
         stats.iteration(machine);
         let mut serial_keys = alloc::vec::Vec::new();
-        while let Some(event) = crate::kernel::serial_console::try_read_event(machine.now()) {
+        while let Some(event) = crate::kernel::serial_console::try_read_event() {
             match event {
                 crate::kernel::console_protocol::ConsoleProtocolEvent::Control(
                     crate::kernel::console_protocol::ConsoleControl::Reboot,

@@ -4,7 +4,7 @@
 //! serial_log path so there is one compatible serial egress until runtime
 //! session output ownership is implemented.
 
-use core::sync::atomic::{AtomicU8, Ordering};
+use core::sync::atomic::{AtomicU8, AtomicU32, Ordering};
 
 use arch_abi::ComPort;
 use crate::kernel::console_protocol::{ConsoleProtocolDecoder, ConsoleProtocolEvent};
@@ -18,6 +18,7 @@ const FAILED: u8 = 4;
 
 static STATE: AtomicU8 = AtomicU8::new(DISABLED);
 static PORT: AtomicU8 = AtomicU8::new(0);
+static POLL_EPOCH: AtomicU32 = AtomicU32::new(0);
 static mut DECODER: ConsoleProtocolDecoder = ConsoleProtocolDecoder::new();
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -97,17 +98,18 @@ pub fn detach_to_logging() {
 ///
 /// Protocol controls are recognized in every live state, including
 /// `PollingLog`, so reboot does not depend on an attached personality.
-pub fn try_read_event(now_ns: u64) -> Option<ConsoleProtocolEvent> {
+pub fn try_read_event() -> Option<ConsoleProtocolEvent> {
     let state = STATE.load(Ordering::Acquire);
     if state == DISABLED || state == FAILED {
         return None;
     }
     let port = decode(PORT.load(Ordering::Acquire))?;
+    let epoch = u64::from(POLL_EPOCH.fetch_add(1, Ordering::Relaxed));
     let decoder = &raw mut DECODER;
-    unsafe { (*decoder).expire(now_ns); }
+    unsafe { (*decoder).expire(epoch); }
     for _ in 0..64 {
         let byte = Uart16550::new(port).try_read_byte()?;
-        let event = unsafe { (*decoder).feed_at(byte, now_ns) };
+        let event = unsafe { (*decoder).feed_at(byte, epoch) };
         if event.is_some() {
             return event;
         }
